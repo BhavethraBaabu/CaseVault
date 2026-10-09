@@ -17,8 +17,9 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "postgresql://casevault:casevault@localhost:5432/casevault"
 
-    # Security (placeholder — filled in Day 2)
+    # Security
     secret_key: str = "change-me-before-production"
+    access_token_expire_minutes: int = 30
 
 
 settings = Settings()

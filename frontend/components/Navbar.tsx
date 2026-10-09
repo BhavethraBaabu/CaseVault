@@ -1,8 +1,26 @@
+"use client";
+
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+
+import { useAuth } from "@/context/AuthContext";
+
 export default function Navbar() {
+  const { user, logout } = useAuth();
+  const router = useRouter();
+
+  const handleLogout = () => {
+    logout();
+    router.push("/login");
+  };
+
+  const initials = user?.full_name?.charAt(0).toUpperCase() ?? "?";
+
   return (
     <header className="bg-white border-b border-slate-200 shadow-sm">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
+          {/* Logo */}
           <div className="flex items-center gap-3">
             <div className="flex items-center justify-center w-8 h-8 bg-indigo-700 rounded">
               <svg
@@ -19,17 +37,17 @@ export default function Navbar() {
                 />
               </svg>
             </div>
-            <span className="text-xl font-semibold text-slate-900 tracking-tight">
-              CaseVault
-            </span>
+            <span className="text-xl font-semibold text-slate-900 tracking-tight">CaseVault</span>
           </div>
+
+          {/* Nav links */}
           <nav className="hidden md:flex items-center gap-6">
-            <a
-              href="#"
+            <Link
+              href="/"
               className="text-sm font-medium text-indigo-700 border-b-2 border-indigo-700 pb-0.5"
             >
               Dashboard
-            </a>
+            </Link>
             <a
               href="#"
               className="text-sm font-medium text-slate-500 hover:text-slate-900 transition-colors"
@@ -49,13 +67,26 @@ export default function Navbar() {
               Clients
             </a>
           </nav>
+
+          {/* User section */}
           <div className="flex items-center gap-3">
-            <span className="text-xs text-slate-400 hidden sm:block">
-              Day 1 — Foundation
-            </span>
-            <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 text-sm font-medium">
-              U
-            </div>
+            {user && (
+              <>
+                <div className="hidden sm:block text-right">
+                  <p className="text-xs font-medium text-slate-700">{user.full_name}</p>
+                  <p className="text-xs text-slate-400">{user.role}</p>
+                </div>
+                <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 text-sm font-semibold">
+                  {initials}
+                </div>
+                <button
+                  onClick={handleLogout}
+                  className="text-xs font-medium text-slate-500 hover:text-slate-900 transition-colors px-2 py-1 rounded hover:bg-slate-100"
+                >
+                  Sign out
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>

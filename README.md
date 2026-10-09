@@ -7,8 +7,8 @@ It combines structured case and document management with AI-powered semantic
 document retrieval, enabling attorneys to surface relevant precedents and case
 facts instantly.
 
-> **Day 1 status:** Foundation only — infrastructure, API skeleton, database ready.
-> Authentication, case management, and AI features are scheduled for later days.
+> **Day 2 status:** Authentication and authorization complete.
+> Register, login, JWT tokens, protected routes, and role-based access are live.
 
 ---
 
@@ -85,7 +85,8 @@ Key variables:
 |---|---|
 | `DATABASE_URL` | PostgreSQL connection string |
 | `NEXT_PUBLIC_API_URL` | Backend URL (exposed to browser) |
-| `SECRET_KEY` | Application secret (generate with `python -c "import secrets; print(secrets.token_hex(32))"`) |
+| `SECRET_KEY` | JWT signing secret — generate with `python -c "import secrets; print(secrets.token_hex(32))"` |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | JWT lifetime in minutes (default: 30) |
 | `LLM_API_KEY` | LLM provider key (Day 5+) |
 | `EMBEDDING_API_KEY` | Embedding provider key (Day 5+) |
 
@@ -180,23 +181,54 @@ docker compose down -v
 
 ## Health Check
 
-Once the backend is running:
-
 ```bash
 curl http://localhost:8000/health
 ```
 
-Expected response:
+Expected:
 
 ```json
-{
-  "status": "ok",
-  "version": "0.1.0",
-  "database": "ok"
-}
+{"status": "ok", "version": "0.1.0", "database": "ok"}
 ```
 
-API documentation (Swagger UI): http://localhost:8000/docs
+API docs (Swagger UI): http://localhost:8000/docs
+
+---
+
+## Authentication
+
+### How it works
+
+1. **Register** — `POST /auth/register` creates a user with bcrypt-hashed password. Default role: `LAWYER`.
+2. **Login** — `POST /auth/login` returns a signed JWT (`access_token`).
+3. **Protected requests** — include `Authorization: Bearer <token>` header.
+4. **Token validation** — backend validates signature, expiration, user existence, and active status on every request.
+5. **Logout** — client discards the token. Stateless JWT: token is not server-side invalidated.
+
+### Roles
+
+| Role | Description |
+|---|---|
+| `ADMIN` | Full system access |
+| `LAWYER` | Standard authenticated access |
+| `RESTRICTED_LAWYER` | Limited scope (enforced in Day 3+) |
+
+### Quick test
+
+```bash
+# Register
+curl -X POST http://localhost:8000/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"jane@firm.com","password":"Secret123!","full_name":"Jane Lawyer"}'
+
+# Login
+TOKEN=$(curl -s -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"jane@firm.com","password":"Secret123!"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+# Authenticated request
+curl http://localhost:8000/auth/me -H "Authorization: Bearer $TOKEN"
+```
 
 ---
 
@@ -255,16 +287,30 @@ alembic downgrade -1
 
 ## Day 1 Scope
 
-What is implemented in Day 1:
-
 - [x] Next.js frontend with dashboard placeholder
 - [x] FastAPI backend with `GET /health`
 - [x] PostgreSQL + pgvector (database ready)
-- [x] Alembic configured (no business migrations yet)
+- [x] Alembic configured
 - [x] Docker Compose for full stack
 - [x] Environment configuration
 - [x] Basic backend tests
 - [x] Architecture documentation
+
+## Day 2 Scope
+
+- [x] User model with UUID, bcrypt-hashed password, role enum
+- [x] Alembic migration: `users` table
+- [x] `POST /auth/register` — register with email + password
+- [x] `POST /auth/login` — returns JWT access token
+- [x] `GET /auth/me` — returns current authenticated user
+- [x] `POST /auth/logout` — client-side token removal
+- [x] `get_current_user()` FastAPI dependency
+- [x] `require_role()` authorization helper
+- [x] Login page (`/login`)
+- [x] Register page (`/register`)
+- [x] Protected dashboard (redirects to `/login` when unauthenticated)
+- [x] Auth context + localStorage token management
+- [x] 23 backend tests (all pass)
 
 ---
 

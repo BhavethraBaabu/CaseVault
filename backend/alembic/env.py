@@ -1,8 +1,9 @@
 import os
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import engine_from_config, pool
+
+from alembic import context
 
 # Load .env if present (for local development)
 try:
@@ -25,8 +26,8 @@ if config.config_file_name is not None:
 
 # Import the metadata from our models so autogenerate works
 # as more models are added in future days.
-from app.db.session import Base  # noqa: E402
 import app.models  # noqa: E402, F401 — ensures models are registered
+from app.db.session import Base  # noqa: E402
 
 target_metadata = Base.metadata
 

@@ -50,6 +50,81 @@ RAG / AI Services (Day 5+)
 
 ---
 
+## Authentication & Authorization (Day 2)
+
+### Request Flow
+
+```
+Browser
+  |
+  | HTTPS — Authorization: Bearer <JWT>
+  v
+Next.js Frontend
+  |
+  | REST — Authorization: Bearer <JWT>
+  v
+FastAPI Backend
+  |
+  +-- JWT validation (python-jose)
+  |     decode token → verify signature → check expiration
+  +-- User lookup (PostgreSQL)
+  |     load user by ID from JWT sub claim
+  +-- User active check
+  |     reject inactive users with HTTP 403
+  +-- Role authorization (require_role dependency)
+  |     compare user.role (from DB) against required roles
+  v
+Database query (scoped to allowed resources)
+```
+
+### Authentication vs Authorization
+
+| Concept | Question | Implementation |
+|---|---|---|
+| **Authentication** | Who are you? | JWT validation + DB user lookup |
+| **Authorization** | What are you allowed to access? | `require_role()` dependency enforces roles before DB queries |
+
+### JWT Token
+
+Payload contains only:
+- `sub` — user UUID (string)
+- `role` — user role (informational; authoritative role is re-read from DB)
+- `exp` — expiration timestamp
+
+Never contains: passwords, documents, case data, or sensitive information.
+
+### Logout Limitation
+
+CaseVault uses stateless JWTs. The `/auth/logout` endpoint instructs the client
+to discard the token but does NOT invalidate it server-side. The token remains
+cryptographically valid until its `exp` claim.
+
+**Production recommendation**: short-lived tokens (5–15 min) with refresh-token
+rotation, or a token revocation list (e.g. Redis blocklist keyed by `jti`).
+
+### Frontend vs Backend Protection
+
+```
+Frontend route guard (/login redirect) = UX convenience
+Backend auth dependency (get_current_user) = SECURITY
+```
+
+The backend enforces authentication independently on every request.
+Frontend route protection can always be bypassed by a determined user.
+
+### User Roles
+
+| Role | Access |
+|---|---|
+| `ADMIN` | Full system access |
+| `LAWYER` | Normal authenticated access |
+| `RESTRICTED_LAWYER` | Authenticated but intentionally limited scope (Day 3+) |
+
+Roles are stored in PostgreSQL. The JWT `role` claim is informational only —
+role is always re-read from the database to prevent token-based role escalation.
+
+---
+
 ## Critical Security Principles
 
 ### Authorization Before Retrieval
