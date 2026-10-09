@@ -17,14 +17,14 @@ import HealthStatus from "@/components/HealthStatus";
 import { useAuth } from "@/context/AuthContext";
 
 const stats = [
-  { label: "Active Cases", value: "—", note: "Coming in Day 3" },
+  { label: "Active Cases", value: "Live", note: "Day 3" },
   { label: "Documents", value: "—", note: "Coming in Day 4" },
-  { label: "Clients", value: "—", note: "Coming in Day 3" },
+  { label: "Clients", value: "Live", note: "Day 3" },
   { label: "AI Searches", value: "—", note: "Coming in Day 5" },
 ];
 
 const upcomingFeatures = [
-  { icon: "📁", title: "Case Management", day: "Day 3" },
+  { icon: "📁", title: "Case Management", day: "Day 3 — Done" },
   { icon: "📄", title: "Document Upload & Processing", day: "Day 4" },
   { icon: "🤖", title: "AI-Powered RAG Search", day: "Day 5" },
   { icon: "💬", title: "AI Chat Interface", day: "Day 6" },
@@ -144,12 +144,12 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Day 2 status */}
+        {/* Day 3 status */}
         <div className="mt-6 bg-indigo-50 border border-indigo-200 rounded-lg p-4">
-          <p className="text-sm font-semibold text-indigo-800">Day 2 — Authentication Complete</p>
+          <p className="text-sm font-semibold text-indigo-800">Day 3 — Cases &amp; Clients Complete</p>
           <p className="text-xs text-indigo-600 mt-1">
-            JWT authentication, role-based authorization, and protected routes are active.
-            Case management and AI features will be added in upcoming days.
+            Resource-level authorization, case memberships, and client management are active.
+            Use the navigation to manage cases and clients.
           </p>
         </div>
       </main>
@@ -157,7 +157,7 @@ export default function DashboardPage() {
       <footer className="border-t border-slate-200 bg-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <p className="text-xs text-slate-400 text-center">
-            CaseVault &mdash; Legal Intelligence Platform &mdash; Day 2 Foundation
+            CaseVault &mdash; Legal Intelligence Platform &mdash; Day 3 Foundation
           </p>
         </div>
       </footer>

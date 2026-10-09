@@ -44,28 +44,22 @@ export default function Navbar() {
           <nav className="hidden md:flex items-center gap-6">
             <Link
               href="/"
-              className="text-sm font-medium text-indigo-700 border-b-2 border-indigo-700 pb-0.5"
+              className="text-sm font-medium text-slate-500 hover:text-slate-900 transition-colors"
             >
               Dashboard
             </Link>
-            <a
-              href="#"
+            <Link
+              href="/cases"
               className="text-sm font-medium text-slate-500 hover:text-slate-900 transition-colors"
             >
               Cases
-            </a>
-            <a
-              href="#"
-              className="text-sm font-medium text-slate-500 hover:text-slate-900 transition-colors"
-            >
-              Documents
-            </a>
-            <a
-              href="#"
+            </Link>
+            <Link
+              href="/clients"
               className="text-sm font-medium text-slate-500 hover:text-slate-900 transition-colors"
             >
               Clients
-            </a>
+            </Link>
           </nav>
 
           {/* User section */}

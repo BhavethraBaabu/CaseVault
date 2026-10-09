@@ -125,6 +125,153 @@ role is always re-read from the database to prevent token-based role escalation.
 
 ---
 
+## Resource Authorization (Day 3)
+
+### Data Model
+
+```
+User
+  |
+  | CaseMembership (case_id, user_id, role)
+  v
+Case
+  |
+  | FK: case.client_id → client.id
+  v
+Client
+```
+
+A User accesses a Client **only through** a Case they are a member of.
+There is no direct User → Client relationship.
+
+### Role Distinction
+
+**System roles** (UserRole) — control global capabilities:
+
+| Role | Capabilities |
+|---|---|
+| `ADMIN` | Full system access, bypasses all resource-level checks |
+| `LAWYER` | Can create clients/cases; sees only cases where they hold a CaseMembership |
+| `RESTRICTED_LAWYER` | Cannot create clients/cases; sees only cases where explicitly a member |
+
+**Case roles** (CaseMemberRole) — control actions within a specific case:
+
+| Role | Capabilities |
+|---|---|
+| `OWNER` | View, edit, manage members |
+| `MEMBER` | View and edit |
+| `VIEWER` | View only |
+
+These are independent concepts. A `LAWYER` system role does not grant any
+particular case role. Case access is always checked via `CaseMembership`.
+
+### Authorization Flow
+
+```
+Request
+  |
+  v
+get_current_user()          — Authentication: who are you?
+  |
+  v
+Check resource access       — Authorization: can you access THIS resource?
+  |
+  +-- System-role check (require_role)
+  |   e.g., RESTRICTED_LAWYER cannot create cases
+  |
+  +-- Case membership check (get_authorized_case / require_case_role)
+  |   Non-members receive HTTP 404 (hides resource existence)
+  |
+  +-- Case role check (require_case_role(OWNER, MEMBER))
+      VIEWER attempting edit receives HTTP 403
+  |
+  v
+Database query (scoped to authorized resource set)
+  |
+  v
+Return authorized resource
+```
+
+### Critical Security Invariant
+
+**AUTHORIZATION MUST HAPPEN BEFORE RESOURCE RETRIEVAL.**
+
+Never do this:
+```python
+# WRONG — fetches all cases, then filters
+cases = db.query(Case).all()
+return [c for c in cases if user in c.members]
+```
+
+Always do this:
+```python
+# CORRECT — authorization encoded in the SQL query
+cases = (
+    db.query(Case)
+    .join(CaseMembership, CaseMembership.case_id == Case.id)
+    .filter(CaseMembership.user_id == user.id)
+    .all()
+)
+```
+
+This principle extends to Day 4 documents and Day 5 vector search:
+pgvector semantic search must be scoped to the user's authorized document set
+**before** the similarity query executes.
+
+### Resource-Hiding Strategy
+
+Unauthorized access to a specific resource returns **HTTP 404** (not 403).
+
+Rationale: returning 403 confirms the resource exists, which itself leaks
+information to unauthorized users. Returning 404 uniformly prevents
+enumeration of resources the user cannot access.
+
+Exception: explicit system-role violations (e.g., RESTRICTED_LAWYER trying
+to create a case) return 403 because the issue is the user's global role,
+not the specific resource.
+
+### Frontend Authorization
+
+Frontend role checks (hiding "Create Case" for RESTRICTED_LAWYER, hiding
+"Edit" for VIEWER) are **UX only — they are not security**.
+
+The backend independently enforces all authorization on every request.
+A determined user can bypass frontend role checks trivially. The backend
+must never trust frontend claims about user roles or resource ownership.
+
+### Future: Document Permissions (Day 4)
+
+Documents will belong to Cases. The authorization boundary:
+
+```
+User
+  |
+  | CaseMembership
+  v
+Case
+  |
+  | Document.case_id → Case.id
+  v
+Document
+  |
+  | (Day 5)
+  v
+Chunk / Embedding (pgvector)
+```
+
+Any document retrieval query must be scoped to the user's authorized cases:
+```sql
+SELECT documents.*
+FROM documents
+JOIN cases ON cases.id = documents.case_id
+JOIN case_memberships ON case_memberships.case_id = cases.id
+WHERE case_memberships.user_id = :current_user_id;
+```
+
+Vector search must apply the same JOIN before the similarity search.
+
+---
+
 ## Critical Security Principles
 
 ### Authorization Before Retrieval

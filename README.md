@@ -7,8 +7,8 @@ It combines structured case and document management with AI-powered semantic
 document retrieval, enabling attorneys to surface relevant precedents and case
 facts instantly.
 
-> **Day 2 status:** Authentication and authorization complete.
-> Register, login, JWT tokens, protected routes, and role-based access are live.
+> **Day 3 status:** Clients, cases, and resource-level authorization complete.
+> Case memberships, scoped queries, and 81 backend tests are live.
 
 ---
 
@@ -311,6 +311,57 @@ alembic downgrade -1
 - [x] Protected dashboard (redirects to `/login` when unauthenticated)
 - [x] Auth context + localStorage token management
 - [x] 23 backend tests (all pass)
+
+## Day 3 Scope
+
+- [x] `Client` model — UUID, name, email, phone, organization
+- [x] `Case` model — UUID, client_id FK, case_number (unique), title, status enum
+- [x] `CaseMembership` model — case_id + user_id (unique), role enum
+- [x] Alembic migration: `clients`, `cases`, `case_memberships` tables
+- [x] `POST /clients` — create client (ADMIN/LAWYER only)
+- [x] `GET /clients` — list clients (scoped by case membership)
+- [x] `GET /clients/{id}` — get client (404 for unauthorized)
+- [x] `PUT /clients/{id}` — update client (ADMIN or OWNER/MEMBER in case)
+- [x] `DELETE /clients/{id}` — delete client (ADMIN only; 409 if cases exist)
+- [x] `POST /cases` — create case (ADMIN/LAWYER; auto-creates OWNER membership)
+- [x] `GET /cases` — list cases (scoped by membership)
+- [x] `GET /cases/{id}` — get case (404 for non-members)
+- [x] `PUT /cases/{id}` — update case (ADMIN/OWNER/MEMBER; 403 for VIEWER)
+- [x] `DELETE /cases/{id}` — delete case (ADMIN/OWNER)
+- [x] `POST /cases/{id}/members` — add member (ADMIN/OWNER)
+- [x] `GET /cases/{id}/members` — list members (any case member)
+- [x] `PUT /cases/{id}/members/{user_id}` — change role (ADMIN/OWNER)
+- [x] `DELETE /cases/{id}/members/{user_id}` — remove member (ADMIN/OWNER; 400 for last OWNER)
+- [x] `get_authorized_case()` dependency — database-scoped case access
+- [x] `require_case_role()` dependency — case role enforcement
+- [x] Clients page (`/clients`) — list + create
+- [x] Cases page (`/cases`) — list + create
+- [x] Case detail page (`/cases/[id]`) — info, client, members
+- [x] Extended API client (`api.clients`, `api.cases`, `api.caseMembers`)
+- [x] 81 backend tests (all pass, +58 Day 3 tests)
+- [x] Resource isolation test: User A cannot access User B's cases
+- [x] Architecture documentation updated
+
+---
+
+### Day 3 API Endpoints
+
+```bash
+# Clients
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/clients
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  http://localhost:8000/clients \
+  -d '{"name":"Acme Corp","email":"acme@example.com"}'
+
+# Cases
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/cases
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  http://localhost:8000/cases \
+  -d '{"client_id":"<uuid>","case_number":"CASE-2026-001","title":"Acme v. Example"}'
+
+# Case members
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/cases/<id>/members
+```
 
 ---
 
