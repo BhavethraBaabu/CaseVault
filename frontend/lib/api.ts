@@ -135,6 +135,78 @@ export interface DocumentChunkResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Search (Day 5)
+// ---------------------------------------------------------------------------
+
+export interface SearchRequest {
+  query: string;
+  case_id?: string | null;
+  limit?: number;
+}
+
+export interface SearchResultItem {
+  chunk_id: string;
+  document_id: string;
+  document_name: string;
+  case_id: string;
+  chunk_index: number;
+  page_number: number | null;
+  content: string;
+  /** Cosine similarity in [0, 1]. Higher = more relevant. */
+  similarity: number;
+}
+
+export interface SearchResponse {
+  query: string;
+  results: SearchResultItem[];
+  total: number;
+}
+
+// ---------------------------------------------------------------------------
+// Chat / RAG (Day 6)
+// ---------------------------------------------------------------------------
+
+export interface AskRequest {
+  question: string;
+  conversation_id?: string | null;
+  case_id?: string | null;
+}
+
+export interface SourceCitation {
+  document_id: string;
+  document_name: string;
+  case_id: string;
+  chunk_id: string;
+  chunk_index: number;
+  page_number: number | null;
+  excerpt: string;
+  /** Cosine similarity in [0, 1]. */
+  similarity: number;
+}
+
+export interface AskResponse {
+  conversation_id: string;
+  answer: string;
+  insufficient_evidence: boolean;
+  sources: SourceCitation[];
+}
+
+export interface ConversationResponse {
+  id: string;
+  case_id: string | null;
+  title: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MessageResponse {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
@@ -290,6 +362,36 @@ export const api = {
     },
     delete(documentId: string): Promise<void> {
       return request<void>(`/documents/${documentId}`, { method: "DELETE" });
+    },
+  },
+
+  search: {
+    query(data: SearchRequest): Promise<SearchResponse> {
+      return request<SearchResponse>("/search", {
+        method: "POST",
+        body: JSON.stringify(data),
+      });
+    },
+    triggerEmbed(): Promise<{ embedded: number }> {
+      return request<{ embedded: number }>("/search/embed", { method: "POST" });
+    },
+  },
+
+  chat: {
+    ask(data: AskRequest): Promise<AskResponse> {
+      return request<AskResponse>("/chat/ask", {
+        method: "POST",
+        body: JSON.stringify(data),
+      });
+    },
+    listConversations(): Promise<ConversationResponse[]> {
+      return request<ConversationResponse[]>("/chat/conversations");
+    },
+    getMessages(conversationId: string): Promise<MessageResponse[]> {
+      return request<MessageResponse[]>(`/chat/conversations/${conversationId}/messages`);
+    },
+    deleteConversation(conversationId: string): Promise<void> {
+      return request<void>(`/chat/conversations/${conversationId}`, { method: "DELETE" });
     },
   },
 

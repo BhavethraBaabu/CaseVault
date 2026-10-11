@@ -7,6 +7,7 @@ from sqlalchemy import Uuid as SaUuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
+from app.db.types import EmbeddingVector
 
 
 class DocumentStatus(str, PyEnum):
@@ -95,6 +96,27 @@ class Document(Base):
     )
 
 
+class EmbeddingStatus(str, PyEnum):
+    """
+    Lifecycle status of a chunk's embedding.
+
+    PENDING    — chunk exists but has no embedding yet
+    PROCESSING — embedding generation in progress (set before batch start)
+    READY      — valid embedding stored for current model
+    FAILED     — embedding generation failed; safe to retry
+    """
+
+    PENDING = "PENDING"
+    PROCESSING = "PROCESSING"
+    READY = "READY"
+    FAILED = "FAILED"
+
+
+# Dimension of the all-MiniLM-L6-v2 embedding model (fixed at 384).
+# Must match EMBEDDING_DIM in app.core.config.
+EMBEDDING_DIMENSION = 384
+
+
 class DocumentChunk(Base):
     """
     A contiguous, overlapping text chunk extracted from a Document.
@@ -102,8 +124,13 @@ class DocumentChunk(Base):
     Chunks are ordered by chunk_index (0-based, deterministic).
     token_count is an estimate: words * 1.3, rounded to nearest integer.
 
-    No embedding column is present on Day 4.
-    Day 5 will add vector embeddings via a separate migration.
+    Day 5 adds:
+      - embedding: nullable vector(384), populated by the embedding pipeline
+      - embedding_model: model name used to generate the embedding
+      - embedding_status: tracks embedding lifecycle (PENDING → READY/FAILED)
+
+    The embedding column uses EmbeddingVector, a TypeDecorator that maps to
+    vector(384) in PostgreSQL and TEXT (JSON) in SQLite for unit tests.
     """
 
     __tablename__ = "document_chunks"
@@ -130,6 +157,20 @@ class DocumentChunk(Base):
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(UTC),
+    )
+
+    # ----- Day 5: Embedding fields -----
+    # vector(384) in PostgreSQL, TEXT (JSON array) in SQLite tests.
+    # Null until the embedding pipeline runs.
+    embedding: Mapped[list[float] | None] = mapped_column(
+        EmbeddingVector(EMBEDDING_DIMENSION), nullable=True
+    )
+    # Name of the model that produced this embedding.
+    # Used to detect stale embeddings when the model changes.
+    embedding_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Tracks embedding lifecycle; defaults to PENDING.
+    embedding_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=EmbeddingStatus.PENDING
     )
 
     document: Mapped["Document"] = relationship("Document", back_populates="chunks")

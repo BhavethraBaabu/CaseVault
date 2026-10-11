@@ -7,9 +7,9 @@ It combines structured case and document management with AI-powered semantic
 document retrieval, enabling attorneys to surface relevant precedents and case
 facts instantly.
 
-> **Day 4 status:** Secure document ingestion pipeline complete.
-> Upload, extract, chunk, and manage documents with full case-level authorization.
-> 117 backend tests pass. Embedding generation and vector search are Day 5.
+> **Day 5 status:** Embedding generation and semantic search complete.
+> Upload → Extract → Chunk → Embed → pgvector Search, with full case-level authorization.
+> 154 backend tests pass. LLM answer generation (RAG) is Day 6.
 
 ---
 
@@ -92,8 +92,12 @@ Key variables:
 | `MAX_UPLOAD_SIZE_BYTES` | Max upload size in bytes (default: 10485760 = 10 MB) |
 | `CHUNK_SIZE_WORDS` | Target words per chunk (default: 500 ≈ 650 tokens) |
 | `CHUNK_OVERLAP_WORDS` | Overlap words between chunks (default: 60 ≈ 78 tokens) |
-| `LLM_API_KEY` | LLM provider key (Day 5+) |
-| `EMBEDDING_API_KEY` | Embedding provider key (Day 5+) |
+| `EMBEDDING_MODEL` | Sentence-transformers model (default: `sentence-transformers/all-MiniLM-L6-v2`) |
+| `EMBEDDING_DIM` | Vector dimension — must match model and DB column (default: 384) |
+| `EMBEDDING_BATCH_SIZE` | Chunks per embedding batch (default: 64) |
+| `SEARCH_DEFAULT_LIMIT` | Default results per search (default: 10) |
+| `SEARCH_MAX_LIMIT` | Hard cap per request (default: 50) |
+| `LLM_API_KEY` | LLM provider key (Day 6+) |
 
 **Never commit `.env` to version control.**
 
@@ -352,13 +356,88 @@ alembic downgrade -1
 
 ### Known Limitations (Day 4)
 
-- **Scanned PDFs**: pypdf cannot extract text from image-based PDFs. OCR is not supported. Such documents receive status `FAILED` with an informative error message.
-- **Synchronous processing**: extraction and chunking happen in the HTTP request. This may add latency for large files near the 10 MB limit. A background-job queue (Celery, ARQ) is the recommended Day 5+ improvement.
-- **Local storage only**: files are stored on the server filesystem. Object storage (S3, GCS) can be added by implementing the `LocalStorage` interface.
-- **In-memory downloads**: files are loaded entirely into memory before streaming. Acceptable for the 10 MB dev limit; replace with streaming for production.
-- **SQLite tests**: in-memory SQLite tests do not validate PostgreSQL-specific behavior (e.g. pgvector, `UUID` type). Live PostgreSQL validation requires a running database.
+- **Scanned PDFs**: pypdf cannot extract text from image-based PDFs. OCR is not supported.
+- **Synchronous processing**: extraction and chunking happen in the HTTP request.
+- **Local storage only**: files are stored on the server filesystem.
+- **SQLite tests**: do not validate PostgreSQL-specific behavior.
 
-### Day 4 API Endpoints
+## Day 5 Scope
+
+- [x] `SentenceTransformerProvider` — `all-MiniLM-L6-v2` (384-dim, CPU, ~90 MB), lazy singleton
+- [x] `FakeEmbeddingProvider` — deterministic vectors for unit tests; no model download
+- [x] `EmbeddingVector` TypeDecorator — `vector(384)` in PostgreSQL, JSON `TEXT` in SQLite
+- [x] Alembic migration `0004_add_embeddings` — pgvector extension, embedding column, HNSW index
+- [x] `embedding_status` lifecycle (`PENDING` → `READY`/`FAILED`) on `DocumentChunk`
+- [x] `embed_document_chunks()` — embed all chunks for a single document
+- [x] `embed_pending_chunks()` — batch-embed all unembedded chunks (idempotent)
+- [x] `POST /search` — semantic search endpoint (authenticated, all roles)
+- [x] `POST /search/embed` — trigger batch embedding (ADMIN only)
+- [x] Authorization-before-ranking: JOIN/WHERE applied before `ORDER BY distance LIMIT k`
+- [x] Cross-case isolation: User A and User B cannot access each other's results
+- [x] Frontend: `/search` page with query input, case filter, result cards, similarity %
+- [x] Navbar: Search link added
+- [x] 37 new tests; 154 total (all pass)
+- [x] No embedding vectors returned in API responses
+- [x] No AI answer generation (Day 6)
+
+### Day 5 Embedding Model
+
+| Property | Value |
+|---|---|
+| Model | `sentence-transformers/all-MiniLM-L6-v2` |
+| Dimension | 384 |
+| Download size | ~90 MB (first use only) |
+| RAM usage | ~200–350 MB on CPU |
+| Why local | No API key required; deterministic; free |
+| Free-tier warning | Some 512 MB RAM instances may OOM; verify before deploying |
+
+### Day 5 Vector Search
+
+| Property | Value |
+|---|---|
+| Storage | pgvector `vector(384)` column |
+| Distance metric | Cosine distance (`<=>` operator) |
+| Similarity score | `1 − cosine_distance` ∈ [0, 1] |
+| Index | HNSW (`vector_cosine_ops`, m=16, ef_construction=64) |
+| Authorization | SQL JOIN before ORDER BY + LIMIT (never post-filter) |
+| SQLite fallback | Python cosine similarity for unit tests |
+
+### Generating Embeddings
+
+After uploading documents, generate embeddings (ADMIN only):
+
+```bash
+# Trigger batch embedding for all unembedded chunks
+curl -X POST http://localhost:8000/search/embed \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+# {"embedded": 42}
+```
+
+### Semantic Search
+
+```bash
+# Search across all accessible cases
+curl -X POST http://localhost:8000/search \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What does the contract say about termination?", "limit": 5}'
+
+# Search within a specific case
+curl -X POST http://localhost:8000/search \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "payment schedule", "case_id": "<uuid>", "limit": 10}'
+```
+
+### Known Limitations (Day 5)
+
+- **Model download**: `all-MiniLM-L6-v2` requires ~90 MB download on first use.
+- **Synchronous embedding**: embedding blocks the `/search/embed` request; not suitable for bulk jobs on large datasets without a task queue.
+- **SQLite isolation**: SQLite tests verify authorization logic but NOT pgvector operators, HNSW index, or extension creation. Live PostgreSQL was unavailable during development (Docker not running). PostgreSQL-specific checks remain outstanding.
+- **No RAG**: search returns raw chunk content only. LLM answer generation is Day 6.
+- **No re-embedding on model change**: changing `EMBEDDING_MODEL` requires running `/search/embed` again; old embeddings are replaced automatically.
+
+### Day 5 API Endpoints
 
 ```bash
 # Upload a document (multipart/form-data)
@@ -385,24 +464,32 @@ curl http://localhost:8000/documents/<doc_id>/chunks \
 # Delete document
 curl -X DELETE http://localhost:8000/documents/<doc_id> \
   -H "Authorization: Bearer $TOKEN"
+
+# Semantic search
+curl -X POST http://localhost:8000/search \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "termination clause", "limit": 5}'
+
+# Generate embeddings (ADMIN only)
+curl -X POST http://localhost:8000/search/embed \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
 ---
 
 ## Intentionally Postponed
 
-The following features are scheduled for later days and are **not** in Day 1:
-
 | Feature | Day |
 |---|---|
-| Authentication (JWT, sessions) | Day 2 |
-| User roles and permissions | Day 2 |
-| Case management | Day 3 |
-| Client management | Day 3 |
-| Embeddings + pgvector search | Day 5 |
-| RAG pipeline | Day 5 |
-| LLM integration | Day 5 |
+| Authentication (JWT, sessions) | Day 2 ✓ |
+| User roles and permissions | Day 2 ✓ |
+| Case management | Day 3 ✓ |
+| Client management | Day 3 ✓ |
+| Document ingestion | Day 4 ✓ |
+| Embeddings + pgvector search | Day 5 ✓ |
+| LLM answer generation (RAG) | Day 6 |
 | AI chat interface | Day 6 |
-| AI agents + tool calling | Day 6 |
-| Audit logging | Day 7 |
-| Production deployment | Day 8+ |
+| AI agents + tool calling | Day 7 |
+| Audit logging | Day 8 |
+| Production deployment | Day 9+ |

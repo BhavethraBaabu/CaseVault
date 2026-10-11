@@ -60,6 +60,18 @@ export default function Navbar() {
             >
               Clients
             </Link>
+            <Link
+              href="/search"
+              className="text-sm font-medium text-slate-500 hover:text-slate-900 transition-colors"
+            >
+              Search
+            </Link>
+            <Link
+              href="/chat"
+              className="text-sm font-medium text-slate-500 hover:text-slate-900 transition-colors"
+            >
+              Chat
+            </Link>
           </nav>
 
           {/* User section */}
