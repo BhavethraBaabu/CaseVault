@@ -20,7 +20,7 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+/backend/lib/
 lib64/
 parts/
 sdist/
@@ -70,6 +70,9 @@ yarn-error.log*
 *.swp
 *.swo
 
-# Claude Code - local only
-.claude/
-CLAUDE.md
+# ---- Document storage (uploaded files — never commit) ----
+backend/storage/
+storage/
+
+
+

@@ -239,14 +239,14 @@ The backend independently enforces all authorization on every request.
 A determined user can bypass frontend role checks trivially. The backend
 must never trust frontend claims about user roles or resource ownership.
 
-### Future: Document Permissions (Day 4)
+### Document Permissions (Day 4)
 
-Documents will belong to Cases. The authorization boundary:
+Documents belong to Cases. The full authorization chain:
 
 ```
 User
   |
-  | CaseMembership
+  | CaseMembership (case_id, user_id, role)
   v
 Case
   |
@@ -254,21 +254,37 @@ Case
   v
 Document
   |
+  | DocumentChunk.document_id → Document.id
+  v
+DocumentChunk
+  |
   | (Day 5)
   v
-Chunk / Embedding (pgvector)
+Embedding / pgvector
 ```
+
+**Document access rules:**
+
+| Action | Required case role |
+|---|---|
+| Upload | OWNER or MEMBER |
+| List / View metadata | OWNER, MEMBER, or VIEWER |
+| Download | OWNER, MEMBER, or VIEWER |
+| List chunks | OWNER, MEMBER, or VIEWER |
+| Delete | OWNER only |
+| Any action | ADMIN bypasses all case checks |
+
+Non-members receive HTTP 404 (resource-hiding, same policy as cases).
 
 Any document retrieval query must be scoped to the user's authorized cases:
 ```sql
 SELECT documents.*
 FROM documents
-JOIN cases ON cases.id = documents.case_id
-JOIN case_memberships ON case_memberships.case_id = cases.id
+JOIN case_memberships ON case_memberships.case_id = documents.case_id
 WHERE case_memberships.user_id = :current_user_id;
 ```
 
-Vector search must apply the same JOIN before the similarity search.
+Day 5 vector search must apply the same JOIN before the similarity query.
 
 ---
 
@@ -333,6 +349,60 @@ FastAPI Backend
   |
 PostgreSQL + pgvector
 ```
+
+---
+
+## Document Ingestion Pipeline (Day 4)
+
+### Pipeline
+
+```
+Upload
+  → Validate (extension, magic bytes, size, empty)
+  → SHA-256 checksum
+  → Store (LocalStorage, UUID-based key, path-traversal prevention)
+  → Extract text (pypdf / python-docx / UTF-8)
+  → Normalize (line endings, whitespace)
+  → Chunk (word-based sliding window, configurable size/overlap)
+  → Persist DocumentChunk records
+  → [Day 5: Embed → pgvector]
+```
+
+### Storage Abstraction
+
+`LocalStorage` implements a minimal interface (`save`, `load`, `delete`, `exists`).
+Switching to object storage (S3, GCS) requires only a new implementation of this interface.
+
+Storage keys are always UUID-based (`{case_id}/{uuid4()}`). User-supplied filenames
+are stored as `original_filename` (display only) and never used as filesystem paths.
+
+### Text Extraction
+
+| Format | Library | Limitation |
+|---|---|---|
+| PDF | pypdf 5.x | Text-based PDFs only; scanned/image PDFs yield FAILED status. OCR not supported. |
+| DOCX | python-docx 1.x | Paragraphs + table cells |
+| TXT | stdlib | UTF-8 required |
+
+### Chunking
+
+Word-based sliding window. Token counts are estimates: `words * 1.3` (no tokenizer dependency).
+
+| Parameter | Default | Config key |
+|---|---|---|
+| Chunk size | 500 words ≈ 650 tokens | `CHUNK_SIZE_WORDS` |
+| Overlap | 60 words ≈ 78 tokens | `CHUNK_OVERLAP_WORDS` |
+
+### Embedding Provider Stub
+
+`EmbeddingProvider` Protocol defined in `services/embedding_provider.py`.
+Day 5 will implement a concrete provider and add embeddings to chunks.
+
+### Processing Limitation
+
+Processing is **synchronous** in Day 4. The upload HTTP request blocks until
+extraction and chunking complete. For documents near 10 MB, this may be several
+seconds. Recommended Day 5+ improvement: background job queue (Celery / ARQ).
 
 ---
 

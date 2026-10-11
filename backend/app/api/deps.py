@@ -40,6 +40,7 @@ from app.core.security import decode_access_token
 from app.db.session import SessionLocal
 from app.models.case import Case
 from app.models.case_membership import CaseMemberRole, CaseMembership
+from app.models.document import Document
 from app.models.user import User, UserRole
 
 bearer_scheme = HTTPBearer()
@@ -203,5 +204,94 @@ def require_case_role(*roles: CaseMemberRole):
             )
         case = db.get(Case, case_id)
         return case
+
+    return _check
+
+
+def get_authorized_document(
+    document_id: uuid.UUID,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> Document:
+    """
+    Dependency: return a document if the current user can access it.
+
+    Authorization:
+      - ADMIN: unrestricted access to any document.
+      - Others: must hold a CaseMembership for the document's case (any role).
+
+    Returns HTTP 404 for both non-existent documents and unauthorized access
+    to hide resource existence from non-members.
+    """
+    doc = db.get(Document, document_id)
+    if doc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found",
+        )
+
+    if current_user.role != UserRole.ADMIN:
+        membership = (
+            db.query(CaseMembership)
+            .filter(
+                CaseMembership.case_id == doc.case_id,
+                CaseMembership.user_id == current_user.id,
+            )
+            .first()
+        )
+        if membership is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Document not found",
+            )
+
+    return doc
+
+
+def require_document_case_role(*roles: CaseMemberRole):
+    """
+    Factory: return a dependency that verifies the user's case-level role
+    for the document's case.
+
+    ADMIN bypasses the check.
+    Non-admin users must hold one of the given roles in the document's case.
+
+    Returns HTTP 404 for non-members; HTTP 403 for insufficient role.
+    """
+
+    def _check(
+        document_id: uuid.UUID,
+        db: Annotated[Session, Depends(get_db)],
+        current_user: Annotated[User, Depends(get_current_user)],
+    ) -> Document:
+        doc = db.get(Document, document_id)
+        if doc is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Document not found",
+            )
+
+        if current_user.role == UserRole.ADMIN:
+            return doc
+
+        membership = (
+            db.query(CaseMembership)
+            .filter(
+                CaseMembership.case_id == doc.case_id,
+                CaseMembership.user_id == current_user.id,
+            )
+            .first()
+        )
+        if membership is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Document not found",
+            )
+        if membership.role not in roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient case permissions",
+            )
+        return doc
 
     return _check

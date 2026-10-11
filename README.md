@@ -7,8 +7,9 @@ It combines structured case and document management with AI-powered semantic
 document retrieval, enabling attorneys to surface relevant precedents and case
 facts instantly.
 
-> **Day 3 status:** Clients, cases, and resource-level authorization complete.
-> Case memberships, scoped queries, and 81 backend tests are live.
+> **Day 4 status:** Secure document ingestion pipeline complete.
+> Upload, extract, chunk, and manage documents with full case-level authorization.
+> 117 backend tests pass. Embedding generation and vector search are Day 5.
 
 ---
 
@@ -87,6 +88,10 @@ Key variables:
 | `NEXT_PUBLIC_API_URL` | Backend URL (exposed to browser) |
 | `SECRET_KEY` | JWT signing secret — generate with `python -c "import secrets; print(secrets.token_hex(32))"` |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | JWT lifetime in minutes (default: 30) |
+| `DOCUMENT_STORAGE_PATH` | Absolute path for uploaded file storage (default: `backend/storage/documents`) |
+| `MAX_UPLOAD_SIZE_BYTES` | Max upload size in bytes (default: 10485760 = 10 MB) |
+| `CHUNK_SIZE_WORDS` | Target words per chunk (default: 500 ≈ 650 tokens) |
+| `CHUNK_OVERLAP_WORDS` | Overlap words between chunks (default: 60 ≈ 78 tokens) |
 | `LLM_API_KEY` | LLM provider key (Day 5+) |
 | `EMBEDDING_API_KEY` | Embedding provider key (Day 5+) |
 
@@ -318,49 +323,68 @@ alembic downgrade -1
 - [x] `Case` model — UUID, client_id FK, case_number (unique), title, status enum
 - [x] `CaseMembership` model — case_id + user_id (unique), role enum
 - [x] Alembic migration: `clients`, `cases`, `case_memberships` tables
-- [x] `POST /clients` — create client (ADMIN/LAWYER only)
-- [x] `GET /clients` — list clients (scoped by case membership)
-- [x] `GET /clients/{id}` — get client (404 for unauthorized)
-- [x] `PUT /clients/{id}` — update client (ADMIN or OWNER/MEMBER in case)
-- [x] `DELETE /clients/{id}` — delete client (ADMIN only; 409 if cases exist)
-- [x] `POST /cases` — create case (ADMIN/LAWYER; auto-creates OWNER membership)
-- [x] `GET /cases` — list cases (scoped by membership)
-- [x] `GET /cases/{id}` — get case (404 for non-members)
-- [x] `PUT /cases/{id}` — update case (ADMIN/OWNER/MEMBER; 403 for VIEWER)
-- [x] `DELETE /cases/{id}` — delete case (ADMIN/OWNER)
-- [x] `POST /cases/{id}/members` — add member (ADMIN/OWNER)
-- [x] `GET /cases/{id}/members` — list members (any case member)
-- [x] `PUT /cases/{id}/members/{user_id}` — change role (ADMIN/OWNER)
-- [x] `DELETE /cases/{id}/members/{user_id}` — remove member (ADMIN/OWNER; 400 for last OWNER)
-- [x] `get_authorized_case()` dependency — database-scoped case access
-- [x] `require_case_role()` dependency — case role enforcement
-- [x] Clients page (`/clients`) — list + create
-- [x] Cases page (`/cases`) — list + create
-- [x] Case detail page (`/cases/[id]`) — info, client, members
-- [x] Extended API client (`api.clients`, `api.cases`, `api.caseMembers`)
-- [x] 81 backend tests (all pass, +58 Day 3 tests)
-- [x] Resource isolation test: User A cannot access User B's cases
-- [x] Architecture documentation updated
+- [x] Full CRUD for clients, cases, and memberships
+- [x] `get_authorized_case()` + `require_case_role()` dependencies
+- [x] Frontend: `/clients`, `/cases`, `/cases/[id]`
+- [x] 81 backend tests (all pass)
 
----
+## Day 4 Scope
 
-### Day 3 API Endpoints
+- [x] `Document` model — UUID, case_id FK, uploaded_by FK, filename, storage_key, content_type, file_size, file_hash, status, page_count, error_message
+- [x] `DocumentChunk` model — UUID, document_id FK, chunk_index, content (Text), token_count (estimated), page_number
+- [x] Alembic migration `0003_create_documents_chunks`
+- [x] `POST /cases/{case_id}/documents` — upload (OWNER/MEMBER only)
+- [x] `GET /cases/{case_id}/documents` — list (any case member)
+- [x] `GET /documents/{document_id}` — metadata (any case member; 404 for non-members)
+- [x] `GET /documents/{document_id}/download` — binary download (any case member)
+- [x] `GET /documents/{document_id}/chunks` — chunk list (any case member)
+- [x] `DELETE /documents/{document_id}` — delete + chunks + file (OWNER/ADMIN)
+- [x] File validation: extension whitelist, content-based magic-byte verification, size limit, empty file rejection
+- [x] Text extraction: PDF (pypdf, text-based), DOCX (python-docx), TXT (UTF-8)
+- [x] Text normalization: line endings, whitespace, paragraph boundaries
+- [x] Overlapping chunking: configurable word-based windows with documented token approximation
+- [x] `LocalStorage` abstraction with path-traversal prevention
+- [x] `EmbeddingProvider` Protocol stub (interface only; Day 5 fills implementation)
+- [x] `get_authorized_document()` + `require_document_case_role()` dependencies
+- [x] Frontend: document upload, list, download, delete on `/cases/[id]`
+- [x] 36 new document tests; 117 total (all pass)
+- [x] storage_key never exposed in API responses
+
+### Known Limitations (Day 4)
+
+- **Scanned PDFs**: pypdf cannot extract text from image-based PDFs. OCR is not supported. Such documents receive status `FAILED` with an informative error message.
+- **Synchronous processing**: extraction and chunking happen in the HTTP request. This may add latency for large files near the 10 MB limit. A background-job queue (Celery, ARQ) is the recommended Day 5+ improvement.
+- **Local storage only**: files are stored on the server filesystem. Object storage (S3, GCS) can be added by implementing the `LocalStorage` interface.
+- **In-memory downloads**: files are loaded entirely into memory before streaming. Acceptable for the 10 MB dev limit; replace with streaming for production.
+- **SQLite tests**: in-memory SQLite tests do not validate PostgreSQL-specific behavior (e.g. pgvector, `UUID` type). Live PostgreSQL validation requires a running database.
+
+### Day 4 API Endpoints
 
 ```bash
-# Clients
-curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/clients
-curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  http://localhost:8000/clients \
-  -d '{"name":"Acme Corp","email":"acme@example.com"}'
+# Upload a document (multipart/form-data)
+curl -X POST http://localhost:8000/cases/<case_id>/documents \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "file=@contract.pdf"
 
-# Cases
-curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/cases
-curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  http://localhost:8000/cases \
-  -d '{"client_id":"<uuid>","case_number":"CASE-2026-001","title":"Acme v. Example"}'
+# List documents in a case
+curl http://localhost:8000/cases/<case_id>/documents \
+  -H "Authorization: Bearer $TOKEN"
 
-# Case members
-curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/cases/<id>/members
+# Get document metadata
+curl http://localhost:8000/documents/<doc_id> \
+  -H "Authorization: Bearer $TOKEN"
+
+# Download original file
+curl http://localhost:8000/documents/<doc_id>/download \
+  -H "Authorization: Bearer $TOKEN" -o downloaded.pdf
+
+# List chunks
+curl http://localhost:8000/documents/<doc_id>/chunks \
+  -H "Authorization: Bearer $TOKEN"
+
+# Delete document
+curl -X DELETE http://localhost:8000/documents/<doc_id> \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ---
@@ -375,8 +399,6 @@ The following features are scheduled for later days and are **not** in Day 1:
 | User roles and permissions | Day 2 |
 | Case management | Day 3 |
 | Client management | Day 3 |
-| Document upload (PDF/DOCX) | Day 4 |
-| Document chunking | Day 4 |
 | Embeddings + pgvector search | Day 5 |
 | RAG pipeline | Day 5 |
 | LLM integration | Day 5 |
