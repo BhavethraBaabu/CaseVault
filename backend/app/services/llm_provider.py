@@ -95,3 +95,48 @@ class FakeLLMProvider:
         if self._raise_error:
             raise LLMError("Fake provider error (raise_error=True)")
         return self._response
+
+
+class FakeSequentialProvider:
+    """
+    Deterministic LLM provider that returns responses from a pre-configured
+    sequence.  Used for agent tests that require multiple round-trips.
+
+    When the sequence is exhausted, the last response is returned for all
+    subsequent calls.
+
+    Args:
+        responses:  Ordered list of strings to return from generate().
+        raise_on:   If given, raise LLMError on this 1-based call index.
+    """
+
+    def __init__(
+        self,
+        responses: list[str],
+        raise_on: int | None = None,
+    ) -> None:
+        if not responses:
+            responses = ['{"type": "answer", "content": "No response configured."}']
+        self._responses = responses
+        self._raise_on = raise_on
+        self._index = 0
+        self.call_count: int = 0
+        # Full call log for assertions
+        self.call_log: list[dict] = []
+
+    def generate(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, str]],
+        max_tokens: int = 600,
+    ) -> str:
+        self.call_count += 1
+        self.call_log.append(
+            {"system_prompt": system_prompt, "messages": list(messages)}
+        )
+        if self._raise_on is not None and self.call_count == self._raise_on:
+            raise LLMError(f"Fake provider error on call {self.call_count}")
+        resp = self._responses[self._index]
+        # Advance index but clamp at last entry
+        self._index = min(self._index + 1, len(self._responses) - 1)
+        return resp

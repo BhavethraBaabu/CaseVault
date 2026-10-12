@@ -395,6 +395,15 @@ export const api = {
     },
   },
 
+  agent: {
+    run(data: AgentRunRequest): Promise<AgentRunResponse> {
+      return request<AgentRunResponse>("/agent/run", {
+        method: "POST",
+        body: JSON.stringify(data),
+      });
+    },
+  },
+
   caseMembers: {
     list(caseId: string): Promise<CaseMembershipResponse[]> {
       return request<CaseMembershipResponse[]>(`/cases/${caseId}/members`);
@@ -420,6 +429,41 @@ export const api = {
     },
   },
 };
+
+// ---------------------------------------------------------------------------
+// Agent (Day 7)
+// ---------------------------------------------------------------------------
+
+export interface AgentRunRequest {
+  task: string;
+  case_id?: string | null;
+}
+
+export interface AgentToolTrace {
+  tool_name: string;
+  success: boolean;
+}
+
+export interface AgentCitation {
+  document_id: string;
+  document_name: string;
+  case_id: string;
+  chunk_id: string;
+  chunk_index: number;
+  page_number: number | null;
+  excerpt: string;
+  /** Cosine similarity in [0, 1]. */
+  similarity: number;
+}
+
+export interface AgentRunResponse {
+  answer: string;
+  tools_executed: AgentToolTrace[];
+  citations: AgentCitation[];
+  insufficient_evidence: boolean;
+  status: "success" | "error";
+  error: string | null;
+}
 
 // ---------------------------------------------------------------------------
 // Legacy export — kept for HealthStatus component compatibility

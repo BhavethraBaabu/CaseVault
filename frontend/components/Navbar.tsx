@@ -72,6 +72,12 @@ export default function Navbar() {
             >
               Chat
             </Link>
+            <Link
+              href="/agent"
+              className="text-sm font-medium text-slate-500 hover:text-slate-900 transition-colors"
+            >
+              Agent
+            </Link>
           </nav>
 
           {/* User section */}

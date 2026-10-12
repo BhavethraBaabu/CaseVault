@@ -76,3 +76,7 @@ storage/
 
 
 
+
+# Local-only Claude Code configuration
+/.claude/
+/CLAUDE.md

@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.v1.agent import router as agent_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.cases import router as cases_router
 from app.api.v1.chat import router as chat_router
@@ -33,3 +34,4 @@ app.include_router(cases_router)
 app.include_router(documents_router)
 app.include_router(search_router)
 app.include_router(chat_router)
+app.include_router(agent_router)

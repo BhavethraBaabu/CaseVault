@@ -7,9 +7,8 @@ It combines structured case and document management with AI-powered semantic
 document retrieval, enabling attorneys to surface relevant precedents and case
 facts instantly.
 
-> **Day 5 status:** Embedding generation and semantic search complete.
-> Upload → Extract → Chunk → Embed → pgvector Search, with full case-level authorization.
-> 154 backend tests pass. LLM answer generation (RAG) is Day 6.
+> **Day 7 status:** Secure AI agent with controlled tool registry complete.
+> 242 backend tests pass. Agent enforces per-call authorization; all tools are read-only.
 
 ---
 
@@ -97,7 +96,13 @@ Key variables:
 | `EMBEDDING_BATCH_SIZE` | Chunks per embedding batch (default: 64) |
 | `SEARCH_DEFAULT_LIMIT` | Default results per search (default: 10) |
 | `SEARCH_MAX_LIMIT` | Hard cap per request (default: 50) |
-| `LLM_API_KEY` | LLM provider key (Day 6+) |
+| `LLM_API_KEY` | LLM provider key (required for /chat/ask and /agent/run) |
+| `LLM_PROVIDER` | `openai` (default) or `none` to disable LLM endpoints |
+| `LLM_MODEL` | Model name, e.g. `gpt-4o-mini` (default) |
+| `AGENT_MAX_TOOL_CALLS` | Max tool invocations per agent run (default: 5) |
+| `AGENT_MAX_ITERATIONS` | Max LLM round-trips per run (default: 6) |
+| `AGENT_MAX_TASK_LENGTH` | Max task string length in characters (default: 2000) |
+| `AGENT_MAX_TOOL_OUTPUT_CHARS` | Max characters of tool result in LLM context (default: 4000) |
 
 **Never commit `.env` to version control.**
 
@@ -478,6 +483,128 @@ curl -X POST http://localhost:8000/search/embed \
 
 ---
 
+## Day 7 Scope — Secure AI Agent
+
+### Architecture
+
+```
+User task
+  → POST /agent/run (authenticated)
+  → validated AgentRunRequest schema
+  → run_agent() service
+      → build system prompt (tool definitions + format rules)
+      → LLM generate() → JSON response
+      → parse JSON {"type": "tool_call"|"answer", ...}
+      → validate tool name (allowlist) and args (Pydantic)
+      → execute tool with authenticated user (per-call authorization)
+      → add tool result to LLM context
+      → repeat until answer or limits reached
+      → validate [SOURCE:N] citations against retrieved chunks
+  → AgentRunResponse: answer + citations + execution trace
+```
+
+### Tool Registry
+
+| Tool | Purpose | Authorization |
+|---|---|---|
+| `search_documents` | Semantic search over authorized document chunks | SQL JOIN/WHERE before ranking; non-members get zero results |
+| `list_cases` | List cases accessible to the authenticated user | `list_cases_for_user()` — SQL-level membership filter |
+| `get_case_details` | Retrieve metadata for a specific case | Per-call membership check; returns "not found" for unauthorized |
+| `get_document_context` | Retrieve text chunks from a specific document | Case access + document-case binding both verified |
+
+All tools are **read-only**. Arbitrary SQL, shell, Python, and URL fetching are not available.
+
+### LLM Tool-Calling Approach
+
+The agent uses **JSON-in-prompt structured output** (not OpenAI function calling).
+The LLM is instructed to respond with either:
+
+```json
+{"type": "tool_call", "tool": "<name>", "args": {...}}
+{"type": "answer", "content": "..."}
+```
+
+This works with the existing `LLMProvider.generate()` interface and is fully
+testable with `FakeSequentialProvider` (no network calls required).
+
+### Permission Enforcement
+
+1. **Server-side identity**: user always comes from the JWT, never from request body or LLM output.
+2. **Per-call authorization**: every tool call independently re-checks case membership.
+3. **Pre-retrieval authorization**: `search_documents` encodes authorization in the SQL query before `ORDER BY ... LIMIT`.
+4. **Tool allowlisting**: unknown tool names are rejected before execution.
+5. **Input validation**: args validated against explicit Pydantic schemas.
+6. **Prompt injection defense**: tool result content is delimited; system prompt instructs model to treat it as data.
+7. **Iteration limits**: configurable `agent_max_tool_calls` and `agent_max_iterations`.
+8. **Safe errors**: no stack traces, paths, or API keys in responses.
+
+### New API Endpoint
+
+```
+POST /agent/run
+```
+
+Request:
+```json
+{
+  "task": "What are the payment terms in the vendor contract?",
+  "case_id": "<optional UUID>"
+}
+```
+
+Response:
+```json
+{
+  "answer": "According to [SOURCE:1], the payment terms...",
+  "tools_executed": [
+    {"tool_name": "search_documents", "success": true}
+  ],
+  "citations": [
+    {
+      "document_id": "...",
+      "document_name": "vendor_contract.pdf",
+      "case_id": "...",
+      "chunk_id": "...",
+      "chunk_index": 0,
+      "page_number": 3,
+      "excerpt": "Payment is due within 30 days...",
+      "similarity": 0.912
+    }
+  ],
+  "insufficient_evidence": false,
+  "status": "success",
+  "error": null
+}
+```
+
+### Demo Commands
+
+```bash
+# Register and log in (see Authentication section above for TOKEN setup)
+
+# Run the agent on a task
+curl -X POST http://localhost:8000/agent/run \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"task": "List my accessible cases and summarize the first one."}'
+
+# Scoped to a specific case
+curl -X POST http://localhost:8000/agent/run \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"task": "What does the contract say about termination?", "case_id": "<uuid>"}'
+```
+
+### Known Limitations (Day 7)
+
+- **Fake providers only tested**: all 44 new tests use `FakeSequentialProvider` and `FakeEmbeddingProvider`. Real LLM JSON compliance (model actually returning the required JSON format) is NOT verified.
+- **Prompt injection**: the system cannot fully eliminate prompt injection from adversarial documents. The application validates citations server-side regardless of LLM output.
+- **JSON format compliance**: real LLMs may not always follow the JSON format. Malformed responses are treated as the final answer (no retry).
+- **No conversation persistence**: agent runs are not persisted to the database. Execution history lives only in the API response.
+- **Synchronous execution**: tool calls block the request. Long-running searches add latency.
+
+---
+
 ## Intentionally Postponed
 
 | Feature | Day |
@@ -488,8 +615,8 @@ curl -X POST http://localhost:8000/search/embed \
 | Client management | Day 3 ✓ |
 | Document ingestion | Day 4 ✓ |
 | Embeddings + pgvector search | Day 5 ✓ |
-| LLM answer generation (RAG) | Day 6 |
-| AI chat interface | Day 6 |
-| AI agents + tool calling | Day 7 |
+| LLM answer generation (RAG) | Day 6 ✓ |
+| AI chat interface | Day 6 ✓ |
+| AI agents + tool calling | Day 7 ✓ |
 | Audit logging | Day 8 |
 | Production deployment | Day 9+ |

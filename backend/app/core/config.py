@@ -101,5 +101,18 @@ class Settings(BaseSettings):
     # Maximum tokens the LLM should generate for an answer.
     rag_max_answer_tokens: int = 600
 
+    # ---- Agent (Day 7) ----
+    # Maximum number of tool calls the agent may make per request.
+    agent_max_tool_calls: int = 5
+
+    # Maximum LLM round-trips (each round is one generate() call).
+    agent_max_iterations: int = 6
+
+    # Maximum characters in the task/question submitted to the agent.
+    agent_max_task_length: int = 2000
+
+    # Maximum characters of a single tool result included in LLM context.
+    agent_max_tool_output_chars: int = 4000
+
 
 settings = Settings()
