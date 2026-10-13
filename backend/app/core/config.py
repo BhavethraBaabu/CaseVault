@@ -1,5 +1,6 @@
 import os
 
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -113,6 +114,31 @@ class Settings(BaseSettings):
 
     # Maximum characters of a single tool result included in LLM context.
     agent_max_tool_output_chars: int = 4000
+
+    # ---- HTTP Security (Day 8) ----
+    # Comma-separated list of allowed CORS origins.
+    # Example: CORS_ORIGINS=http://localhost:3000,https://casevault.example.com
+    # Set to your actual frontend domain(s) in production.
+    cors_origins: list[str] = Field(default=["http://localhost:3000"])
+
+    # Set to False in production to disable /docs and /redoc API explorer.
+    # These endpoints expose route details and should not be public in production.
+    docs_enabled: bool = True
+
+    # Maximum request body size in bytes (applies to all endpoints).
+    # Requests with a Content-Length header exceeding this value are rejected
+    # with HTTP 413 before the body is read.
+    # Note: chunked transfer-encoding without Content-Length bypasses this check;
+    # endpoint-level validation (e.g. max_upload_size_bytes) still applies.
+    max_request_body_bytes: int = 10 * 1024 * 1024 + 4096  # 10 MB + multipart overhead
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, v: object) -> list[str]:
+        """Accept either a JSON array or a comma-separated string from env."""
+        if isinstance(v, str):
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
+        return v
 
 
 settings = Settings()

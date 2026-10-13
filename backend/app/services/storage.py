@@ -64,10 +64,21 @@ class LocalStorage:
 
         Raises ValueError for any key that would escape base_dir,
         preventing path-traversal attacks.
+
+        Explicitly rejects:
+        - Absolute paths (starting with "/" or os.sep)
+        - Keys containing backslashes (not valid in storage keys; blocks
+          Windows-style traversal attempts on Unix where "\\" is otherwise
+          a valid filename character)
+        - Any resolved path outside base_dir (handles ".." after join)
         """
-        # Normalize: strip leading slashes, reject absolute paths
-        normalized = key.lstrip(os.sep).lstrip("/")
-        candidate = (self.base_dir / normalized).resolve()
+        # Reject absolute paths — valid storage keys are always relative
+        if key.startswith("/") or (os.sep != "/" and key.startswith(os.sep)):
+            raise ValueError(f"Invalid storage key (potential path traversal): {key!r}")
+        # Reject backslashes — valid storage keys never contain them
+        if "\\" in key:
+            raise ValueError(f"Invalid storage key (potential path traversal): {key!r}")
+        candidate = (self.base_dir / key).resolve()
         inside = str(candidate).startswith(str(self.base_dir) + os.sep)
         if not inside and candidate != self.base_dir:
             raise ValueError(f"Invalid storage key (potential path traversal): {key!r}")

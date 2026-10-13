@@ -26,7 +26,7 @@ Tools
 import uuid
 from dataclasses import dataclass, field
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.models.case import Case
@@ -79,6 +79,8 @@ SEARCH_DOCUMENTS_DESCRIPTION = (
 
 
 class SearchDocumentsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     query: str = Field(..., min_length=1, max_length=500)
     case_id: uuid.UUID | None = None
     limit: int = Field(default=5, ge=1, le=10)
@@ -151,7 +153,7 @@ LIST_CASES_DESCRIPTION = (
 
 
 class ListCasesInput(BaseModel):
-    pass
+    model_config = ConfigDict(extra="forbid")
 
 
 def execute_list_cases(
@@ -207,6 +209,8 @@ GET_CASE_DETAILS_DESCRIPTION = (
 
 
 class GetCaseDetailsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     case_id: uuid.UUID
 
 
@@ -270,6 +274,8 @@ GET_DOCUMENT_CONTEXT_DESCRIPTION = (
 
 
 class GetDocumentContextInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     document_id: uuid.UUID
     case_id: uuid.UUID
     max_chunks: int = Field(default=3, ge=1, le=5)

@@ -99,10 +99,10 @@ def ask_question(
 
     try:
         llm_provider = _get_llm_provider()
-    except LLMError as exc:
+    except LLMError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(exc),
+            detail="AI generation is temporarily unavailable. Please try again.",
         )
 
     try:
