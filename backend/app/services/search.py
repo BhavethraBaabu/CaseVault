@@ -34,16 +34,21 @@ SQLite fallback (unit tests)
   production and does NOT verify pgvector extension behaviour.
 """
 
+import logging
 import math
+import time
 import uuid
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
+from app.core.request_context import get_request_id
 from app.models.case_membership import CaseMembership
 from app.models.document import Document, DocumentChunk
 from app.models.user import User, UserRole
 from app.services.embedding_provider import EmbeddingProvider
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -97,8 +102,12 @@ def semantic_search(
     if limit < 1:
         raise ValueError("limit must be at least 1.")
 
+    _t_start = time.perf_counter()
+
     # Generate query embedding — may raise EmbeddingError
+    _t_embed = time.perf_counter()
     query_vector = provider.embed([query_text])[0]
+    embed_ms = (time.perf_counter() - _t_embed) * 1000
 
     # Verify case access when case_id is supplied
     if case_id is not None:
@@ -106,9 +115,23 @@ def semantic_search(
 
     dialect_name = _dialect_name(db)
     if dialect_name == "postgresql":
-        return _search_postgresql(db, user, query_vector, case_id, limit)
+        results = _search_postgresql(db, user, query_vector, case_id, limit)
     else:
-        return _search_python_fallback(db, user, query_vector, case_id, limit)
+        results = _search_python_fallback(db, user, query_vector, case_id, limit)
+
+    total_ms = (time.perf_counter() - _t_start) * 1000
+    logger.info(
+        "semantic_search completed",
+        extra={
+            "operation": "semantic_search",
+            "duration_ms": round(total_ms, 1),
+            "embed_ms": round(embed_ms, 1),
+            "results_count": len(results),
+            "case_scoped": case_id is not None,
+            "request_id": get_request_id(),
+        },
+    )
+    return results
 
 
 # ---------------------------------------------------------------------------

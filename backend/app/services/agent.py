@@ -48,12 +48,14 @@ This approach:
 import json
 import logging
 import re
+import time
 import uuid
 from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.request_context import get_request_id
 from app.models.user import User
 from app.services.agent_tools import (
     ALLOWED_TOOL_NAMES,
@@ -152,6 +154,8 @@ def run_agent(
         raise ValueError(
             f"Task exceeds maximum length of {settings.agent_max_task_length} characters."
         )
+
+    _t_start = time.perf_counter()
 
     system_prompt = _build_agent_system_prompt()
 
@@ -304,8 +308,20 @@ def run_agent(
         except LLMError:
             final_answer = "The agent could not produce a final answer."
 
+    _agent_duration_ms = (time.perf_counter() - _t_start) * 1000
+
     # Handle insufficient evidence sentinel
     if final_answer and final_answer.strip() == _INSUFFICIENT_SENTINEL:
+        logger.info(
+            "agent.run completed",
+            extra={
+                "operation": "agent.run",
+                "duration_ms": round(_agent_duration_ms, 1),
+                "tool_calls": tool_call_count,
+                "outcome": "insufficient_evidence",
+                "request_id": get_request_id(),
+            },
+        )
         return AgentResult(
             answer=(
                 "I couldn't find sufficient supporting information in the documents "
@@ -322,6 +338,18 @@ def run_agent(
 
     insufficient = not retrieved_chunks and not any(
         t.tool_name == SEARCH_DOCUMENTS_NAME and t.success for t in tool_traces
+    )
+
+    logger.info(
+        "agent.run completed",
+        extra={
+            "operation": "agent.run",
+            "duration_ms": round(_agent_duration_ms, 1),
+            "tool_calls": tool_call_count,
+            "citations_validated": len(citations),
+            "outcome": "insufficient_evidence" if insufficient else "success",
+            "request_id": get_request_id(),
+        },
     )
 
     return AgentResult(

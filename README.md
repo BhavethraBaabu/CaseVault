@@ -7,8 +7,9 @@ It combines structured case and document management with AI-powered semantic
 document retrieval, enabling attorneys to surface relevant precedents and case
 facts instantly.
 
-> **Day 7 status:** Secure AI agent with controlled tool registry complete.
-> 242 backend tests pass. Agent enforces per-call authorization; all tools are read-only.
+> **Day 9 status:** Observability and production readiness complete.
+> 359 backend tests pass. Structured logging, request ID correlation, expanded health endpoints,
+> global exception handling, and AI pipeline timing instrumentation added.
 
 ---
 
@@ -193,16 +194,35 @@ docker compose down -v
 
 ---
 
-## Health Check
+## Health and Readiness Endpoints
+
+CaseVault exposes four health endpoints (added Day 9):
+
+| Endpoint | Purpose | HTTP status |
+|---|---|---|
+| `GET /health` | Legacy combined check (backwards-compatible) | Always 200 |
+| `GET /health/live` | Liveness probe — process is running | Always 200 |
+| `GET /health/ready` | Readiness probe — DB reachable within timeout | 200 or 503 |
+| `GET /health/config` | AI provider configuration status (no API calls) | Always 200 |
 
 ```bash
+# Liveness (use for Kubernetes livenessProbe)
+curl http://localhost:8000/health/live
+# {"status": "ok"}
+
+# Readiness (use for Kubernetes readinessProbe)
+curl http://localhost:8000/health/ready
+# {"status": "ok", "checks": {"database": "ok"}}
+# or (DB unavailable):
+# HTTP 503 {"status": "degraded", "checks": {"database": "unavailable"}}
+
+# Provider configuration status
+curl http://localhost:8000/health/config
+# {"status": "ok", "environment": "development", "providers": {"llm": "not_configured", "embedding": "local"}}
+
+# Legacy endpoint
 curl http://localhost:8000/health
-```
-
-Expected:
-
-```json
-{"status": "ok", "version": "0.1.0", "database": "ok"}
+# {"status": "ok", "version": "0.1.0", "database": "ok"}
 ```
 
 API docs (Swagger UI): http://localhost:8000/docs
@@ -274,6 +294,21 @@ npx tsc --noEmit
 ```bash
 cd frontend
 npm run lint
+```
+
+### Frontend production build
+
+```bash
+cd frontend
+npm run build
+```
+
+### Python lint (ruff)
+
+```bash
+cd backend
+source .venv/bin/activate
+ruff check .
 ```
 
 ---
@@ -605,6 +640,98 @@ curl -X POST http://localhost:8000/agent/run \
 
 ---
 
+## Day 9 Scope — Observability and Production Readiness
+
+### Request ID Correlation
+
+Every request receives a unique `X-Request-ID` header (echoed in responses):
+
+- Client may supply a custom ID matching `[a-zA-Z0-9-]{1,64}` — it will be echoed unchanged.
+- Invalid or absent IDs are replaced with a fresh UUID4.
+- The ID is stored in a `ContextVar` so all log lines within a request include it automatically.
+- The ID appears in error response bodies (`{"detail": "...", "request_id": "..."}`) for correlation.
+
+```bash
+# Supply your own request ID for end-to-end tracing
+curl -H "X-Request-ID: my-trace-id" http://localhost:8000/health/live
+# Response header: X-Request-ID: my-trace-id
+```
+
+### Structured Logging
+
+Logs use a consistent single-line format:
+
+```
+2026-10-14T12:00:00 INFO     casevault [req-uuid] app.services.rag - rag.ask completed
+```
+
+Fields:
+- `timestamp` — ISO 8601
+- `level` — DEBUG / INFO / WARNING / ERROR / CRITICAL
+- `service` — always `casevault`
+- `[request_id]` — per-request UUID or `-` outside request context
+- `logger` — dotted module path
+- `message`
+
+**AI operation logs** include structured `extra` fields:
+
+| Operation | Key fields logged |
+|---|---|
+| `semantic_search` | `duration_ms`, `embed_ms`, `results_count`, `case_scoped` |
+| `rag.ask` | `duration_ms`, `llm_ms`, `chunks_retrieved`, `chunks_selected`, `citations_validated`, `llm_called`, `insufficient_evidence` |
+| `agent.run` | `duration_ms`, `tool_calls`, `citations_validated`, `outcome` |
+| `document.ingest` | `duration_ms`, `content_type`, `file_size_bytes`, `page_count`, `chunk_count`, `status` |
+
+**Redaction rules — never logged:**
+- Passwords, JWTs, API keys
+- Document text or retrieved excerpts
+- LLM prompts or responses
+- User question text
+- Internal file paths
+
+### Error Handling
+
+- `RequestValidationError` (422): returns `{"detail": "Validation error.", "request_id": "..."}` — no internal field names exposed.
+- Unexpected exceptions: returns `{"detail": "Internal server error.", "request_id": "..."}` — full exception logged server-side.
+- All existing HTTP exception semantics preserved (401, 403, 404, 409, etc.).
+
+### Configuration
+
+New environment variables (Day 9):
+
+| Variable | Default | Description |
+|---|---|---|
+| `ENVIRONMENT` | `development` | Deployment environment label in logs |
+| `LOG_LEVEL` | `INFO` | Logging verbosity |
+| `DB_HEALTH_CHECK_TIMEOUT_SECONDS` | `3.0` | Max wait for DB in `/health/ready` |
+
+### Known Limitations and Unverified Integrations
+
+- **PostgreSQL integration not live-tested**: all tests use SQLite in-memory. pgvector operators, HNSW index, and Alembic migrations have not been exercised against a live PostgreSQL instance in this session.
+- **Real LLM not tested**: all AI pipeline tests use `FakeLLMProvider` / `FakeSequentialProvider`. Real OpenAI API integration is untested.
+- **Real embedding model not tested**: tests use `FakeEmbeddingProvider`. The `sentence-transformers` model download and inference are untested.
+- **Rate limiting**: not implemented at the application level. Requires a reverse-proxy or API gateway (nginx rate_limit, AWS API Gateway, Cloudflare) in production.
+- **TLS**: not configured. Terminate TLS at the load balancer or reverse proxy in production.
+- **Chunked transfer encoding**: the `_BodySizeLimitMiddleware` only checks `Content-Length` headers; chunked requests without a `Content-Length` bypass it. Endpoint-level validation (file size checks) remains the backstop.
+- **Exception handler and BaseHTTPMiddleware (Python 3.13)**: the `@app.exception_handler(Exception)` catch-all works correctly as verified by direct function tests. Integration-level exception propagation through `BaseHTTPMiddleware` + Python 3.13's `ExceptionGroup` mechanism has edge cases with sync routes in threadpools.
+- **Token revocation**: JWTs are stateless. Logout does not invalidate tokens server-side. Production should add short-lived tokens + refresh-token rotation, or a Redis revocation list keyed by `jti`.
+
+### Deployment Checklist
+
+Before deploying to production:
+
+- [ ] Set `SECRET_KEY` to a random 32-byte hex value
+- [ ] Set `LLM_API_KEY` to your provider key
+- [ ] Set `ENVIRONMENT=production`
+- [ ] Set `LOG_LEVEL=INFO` (or `WARNING`)
+- [ ] Set `DOCS_ENABLED=false`
+- [ ] Set `CORS_ORIGINS` to your actual frontend domain(s)
+- [ ] Set `DOCUMENT_STORAGE_PATH` to a persistent volume outside the code tree
+- [ ] Configure rate limiting at the reverse-proxy layer
+- [ ] Terminate TLS before the FastAPI process
+- [ ] Run `alembic upgrade head` on first deploy and after migrations
+- [ ] Verify `/health/ready` returns 200 before routing traffic
+
 ## Intentionally Postponed
 
 | Feature | Day |
@@ -618,5 +745,9 @@ curl -X POST http://localhost:8000/agent/run \
 | LLM answer generation (RAG) | Day 6 ✓ |
 | AI chat interface | Day 6 ✓ |
 | AI agents + tool calling | Day 7 ✓ |
-| Audit logging | Day 8 |
-| Production deployment | Day 9+ |
+| Security hardening | Day 8 ✓ |
+| Observability + production readiness | Day 9 ✓ |
+| Background job queue (embeddings) | Future |
+| Token revocation / refresh tokens | Future |
+| Prometheus metrics endpoint | Future |
+| Distributed tracing | Future |

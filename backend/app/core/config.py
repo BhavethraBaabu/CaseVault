@@ -115,6 +115,19 @@ class Settings(BaseSettings):
     # Maximum characters of a single tool result included in LLM context.
     agent_max_tool_output_chars: int = 4000
 
+    # ---- Observability (Day 9) ----
+    # Deployment environment.  Controls log verbosity and safety guards.
+    # Accepted values: "development", "staging", "production"
+    environment: str = "development"
+
+    # Logging level.  Overridden via LOG_LEVEL env var.
+    # DEBUG emits verbose traces; INFO is recommended for production.
+    log_level: str = "INFO"
+
+    # Maximum seconds to wait for the database in the /health/ready check.
+    # Keeps the readiness probe from hanging indefinitely when the DB is down.
+    db_health_check_timeout_seconds: float = 3.0
+
     # ---- HTTP Security (Day 8) ----
     # Comma-separated list of allowed CORS origins.
     # Example: CORS_ORIGINS=http://localhost:3000,https://casevault.example.com

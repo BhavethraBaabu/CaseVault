@@ -22,6 +22,25 @@ Security controls (Day 8)
 
   API docs gating            — /docs and /redoc are disabled when
                                DOCS_ENABLED=false (recommended in production).
+
+Observability additions (Day 9)
+--------------------------------
+  _RequestIDMiddleware       — Assigns a unique X-Request-ID to every request.
+                               Accepts a client-supplied ID if it matches the
+                               safe pattern (alphanumeric + hyphens, 1–64
+                               chars); generates a UUID4 otherwise.
+                               Stores the ID in a ContextVar for use by
+                               structured logging throughout the call stack.
+                               Resets the ContextVar after the response.
+
+  configure_logging()        — Installs a structured log formatter that
+                               includes timestamp, level, service, environment,
+                               request_id, and logger name.
+
+  Exception handlers         — Global handlers for RequestValidationError and
+                               unexpected exceptions.  Both return safe JSON
+                               bodies (no tracebacks) and include the
+                               request_id for correlation.
 """
 
 import logging
@@ -29,6 +48,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
@@ -42,6 +62,16 @@ from app.api.v1.documents import router as documents_router
 from app.api.v1.health import router as health_router
 from app.api.v1.search import router as search_router
 from app.core.config import settings
+from app.core.logging_config import configure_logging
+from app.core.request_context import (
+    REQUEST_ID_HEADER,
+    generate_request_id,
+    is_safe_request_id,
+    request_id_var,
+)
+
+# Configure structured logging immediately so startup messages use the format
+configure_logging(log_level=settings.log_level)
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +109,15 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
             "python -c \"import secrets; print(secrets.token_hex(32))\"",
             settings.secret_key[:8] + "...",
         )
+    logger.info(
+        "CaseVault starting",
+        extra={
+            "version": settings.app_version,
+            "environment": settings.environment,
+        },
+    )
     yield
+    logger.info("CaseVault shutting down")
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +180,42 @@ class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
+class _RequestIDMiddleware(BaseHTTPMiddleware):
+    """
+    Assign a unique request ID to every request.
+
+    Behaviour:
+    1. If the incoming request carries an X-Request-ID header whose value
+       matches the safe pattern (ASCII letters, digits, hyphens; 1–64 chars),
+       that value is used as-is.
+    2. Otherwise a fresh UUID4 is generated.
+    3. The ID is stored in a ContextVar so structured loggers can include it
+       without explicit passing.
+    4. The ContextVar token is reset after the response, even on error.
+    5. The ID is echoed back in the X-Request-ID response header.
+
+    Concurrent requests each set their own ContextVar token so they never
+    share request IDs accidentally.
+    """
+
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        incoming = request.headers.get(REQUEST_ID_HEADER, "")
+        req_id = incoming if is_safe_request_id(incoming) else generate_request_id()
+
+        token = request_id_var.set(req_id)
+        try:
+            response = await call_next(request)
+        finally:
+            request_id_var.reset(token)
+
+        response.headers[REQUEST_ID_HEADER] = req_id
+        return response
+
+
 # ---------------------------------------------------------------------------
 # Application
 # ---------------------------------------------------------------------------
@@ -156,14 +230,72 @@ app = FastAPI(
     lifespan=_lifespan,
 )
 
+# ---------------------------------------------------------------------------
+# Global exception handlers
+# ---------------------------------------------------------------------------
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_exception_handler(
+    request: Request,
+    exc: RequestValidationError,  # noqa: ARG001
+) -> JSONResponse:
+    """
+    Handle FastAPI/Pydantic request validation errors (HTTP 422).
+
+    Returns a safe, generic message instead of exposing raw validation
+    details (which may reference field names or internal schema details).
+    Includes the request_id for correlation with server-side logs.
+    """
+    req_id = request_id_var.get()
+    logger.warning(
+        "Request validation error on %s %s",
+        request.method,
+        request.url.path,
+        extra={"request_id": req_id},
+    )
+    return JSONResponse(
+        status_code=422,
+        content={"detail": "Validation error.", "request_id": req_id},
+    )
+
+
+@app.exception_handler(Exception)
+async def _unexpected_exception_handler(
+    request: Request,
+    exc: Exception,
+) -> JSONResponse:
+    """
+    Catch-all handler for unexpected exceptions (HTTP 500).
+
+    Logs the full exception server-side for diagnosis, but returns only a
+    safe generic message to the client.  Never exposes tracebacks, internal
+    paths, database details, or provider information in the response.
+    """
+    req_id = request_id_var.get()
+    logger.exception(
+        "Unexpected error on %s %s",
+        request.method,
+        request.url.path,
+        extra={"request_id": req_id},
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error.", "request_id": req_id},
+    )
+
+
 # Middleware registration order: each add_middleware call wraps the previous
 # stack.  The last-registered middleware is the outermost (first to see the
 # request, last to touch the response).
 #
-# Effective request order:  CORS → BodySizeLimit → SecurityHeaders → app
-# Effective response order: app → SecurityHeaders → BodySizeLimit → CORS
+# Effective request order:
+#   CORS → RequestID → BodySizeLimit → SecurityHeaders → app
+# Effective response order:
+#   app → SecurityHeaders → BodySizeLimit → RequestID → CORS
 app.add_middleware(_SecurityHeadersMiddleware)
 app.add_middleware(_BodySizeLimitMiddleware)
+app.add_middleware(_RequestIDMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,

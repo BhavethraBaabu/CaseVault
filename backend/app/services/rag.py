@@ -45,6 +45,7 @@ Hallucination disclaimer
 
 import logging
 import re
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -52,6 +53,7 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.request_context import get_request_id
 from app.models.conversation import Conversation, ConversationMessage
 from app.models.user import User
 from app.services.embedding_provider import EmbeddingProvider
@@ -130,6 +132,8 @@ def ask(
             f"Question exceeds maximum length of {settings.rag_max_question_length} characters."
         )
 
+    _t_start = time.perf_counter()
+
     # Load or create conversation
     conversation = _get_or_create_conversation(db, user, conversation_id, case_id)
 
@@ -153,6 +157,18 @@ def ask(
             "available to you."
         )
         _persist_messages(db, conversation, question, answer)
+        _t_total = (time.perf_counter() - _t_start) * 1000
+        logger.info(
+            "rag.ask completed",
+            extra={
+                "operation": "rag.ask",
+                "duration_ms": round(_t_total, 1),
+                "chunks_retrieved": 0,
+                "llm_called": False,
+                "insufficient_evidence": True,
+                "request_id": get_request_id(),
+            },
+        )
         return RagResponse(
             conversation_id=conversation.id,
             answer=answer,
@@ -170,11 +186,13 @@ def ask(
     messages = history + [{"role": "user", "content": question}]
 
     # Generate answer
+    _t_llm = time.perf_counter()
     raw_answer = llm_provider.generate(
         system_prompt=system_prompt,
         messages=messages,
         max_tokens=settings.rag_max_answer_tokens,
     )
+    llm_ms = (time.perf_counter() - _t_llm) * 1000
 
     # Check for insufficient-evidence sentinel
     if raw_answer.strip() == _INSUFFICIENT_SENTINEL:
@@ -183,6 +201,20 @@ def ask(
             "available to you."
         )
         _persist_messages(db, conversation, question, answer)
+        _t_total = (time.perf_counter() - _t_start) * 1000
+        logger.info(
+            "rag.ask completed",
+            extra={
+                "operation": "rag.ask",
+                "duration_ms": round(_t_total, 1),
+                "llm_ms": round(llm_ms, 1),
+                "chunks_retrieved": len(chunks),
+                "chunks_selected": len(selected),
+                "llm_called": True,
+                "insufficient_evidence": True,
+                "request_id": get_request_id(),
+            },
+        )
         return RagResponse(
             conversation_id=conversation.id,
             answer=answer,
@@ -194,6 +226,22 @@ def ask(
 
     # Persist
     _persist_messages(db, conversation, question, raw_answer)
+
+    _t_total = (time.perf_counter() - _t_start) * 1000
+    logger.info(
+        "rag.ask completed",
+        extra={
+            "operation": "rag.ask",
+            "duration_ms": round(_t_total, 1),
+            "llm_ms": round(llm_ms, 1),
+            "chunks_retrieved": len(chunks),
+            "chunks_selected": len(selected),
+            "citations_validated": len(sources),
+            "llm_called": True,
+            "insufficient_evidence": False,
+            "request_id": get_request_id(),
+        },
+    )
 
     return RagResponse(
         conversation_id=conversation.id,

@@ -1,3 +1,5 @@
+import concurrent.futures
+
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
@@ -25,3 +27,31 @@ def check_db_connection() -> bool:
         return True
     except Exception:
         return False
+
+
+def check_db_ready(timeout_seconds: float | None = None) -> bool:
+    """
+    Return True if the database is reachable within *timeout_seconds*.
+
+    Uses a background thread so the caller is not blocked indefinitely when
+    the database is unreachable or slow to respond.
+
+    Args:
+        timeout_seconds: Maximum seconds to wait.  Defaults to the value
+                         in settings.db_health_check_timeout_seconds.
+
+    Returns:
+        True  — database responded with SELECT 1 within the timeout.
+        False — database unreachable, raised an exception, or timed out.
+    """
+    if timeout_seconds is None:
+        timeout_seconds = settings.db_health_check_timeout_seconds
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(check_db_connection)
+        try:
+            return future.result(timeout=timeout_seconds)
+        except concurrent.futures.TimeoutError:
+            return False
+        except Exception:
+            return False

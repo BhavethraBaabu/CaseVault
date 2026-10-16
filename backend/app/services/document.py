@@ -17,17 +17,22 @@ Known limitation:
 """
 
 import hashlib
+import logging
+import time
 import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.request_context import get_request_id
 from app.models.document import Document, DocumentChunk, DocumentStatus
 from app.services.chunking import chunk_pages
 from app.services.extraction import ExtractionError, extract_text
 from app.services.file_validation import sanitize_filename, validate_file
 from app.services.storage import StorageError, get_storage
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentProcessingError(Exception):
@@ -63,6 +68,8 @@ def ingest_document(
     Raises:
         FileValidationError if content fails validation (no records created).
     """
+    _t_start = time.perf_counter()
+
     # --- 1. Validate (raises FileValidationError on failure) ---
     safe_filename = sanitize_filename(filename)
     content_type = validate_file(filename, content, max_size=settings.max_upload_size_bytes)
@@ -122,10 +129,51 @@ def ingest_document(
         doc.error_message = None
         db.commit()
 
+        _t_total = (time.perf_counter() - _t_start) * 1000
+        logger.info(
+            "document.ingest completed",
+            extra={
+                "operation": "document.ingest",
+                "duration_ms": round(_t_total, 1),
+                "content_type": content_type,
+                "file_size_bytes": len(content),
+                "page_count": result.page_count,
+                "chunk_count": len(chunks),
+                "status": "ready",
+                "request_id": get_request_id(),
+            },
+        )
+
     except ExtractionError as exc:
+        _t_total = (time.perf_counter() - _t_start) * 1000
+        logger.warning(
+            "document.ingest extraction failed",
+            extra={
+                "operation": "document.ingest",
+                "duration_ms": round(_t_total, 1),
+                "content_type": content_type,
+                "file_size_bytes": len(content),
+                "status": "failed",
+                "error_category": "extraction",
+                "request_id": get_request_id(),
+            },
+        )
         _mark_failed(db, doc, str(exc))
     except Exception:
         # Catch-all: log internally but return a safe generic message
+        _t_total = (time.perf_counter() - _t_start) * 1000
+        logger.error(
+            "document.ingest unexpected failure",
+            extra={
+                "operation": "document.ingest",
+                "duration_ms": round(_t_total, 1),
+                "content_type": content_type,
+                "file_size_bytes": len(content),
+                "status": "failed",
+                "error_category": "unexpected",
+                "request_id": get_request_id(),
+            },
+        )
         _mark_failed(
             db,
             doc,
