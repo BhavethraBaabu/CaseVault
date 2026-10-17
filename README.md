@@ -7,20 +7,48 @@ It combines structured case and document management with AI-powered semantic
 document retrieval, enabling attorneys to surface relevant precedents and case
 facts instantly.
 
-> **Day 9 status:** Observability and production readiness complete.
-> 359 backend tests pass. Structured logging, request ID correlation, expanded health endpoints,
-> global exception handling, and AI pipeline timing instrumentation added.
+> **Day 10 status:** Final polish, validation, and demo readiness complete.
+> 359 backend tests pass. All quality gates green.
+> See [docs/DEMO.md](docs/DEMO.md) for the interview demo walkthrough and
+> [docs/INTERVIEW_GUIDE.md](docs/INTERVIEW_GUIDE.md) for architecture trade-offs.
 
 ---
 
 ## Architecture Overview
 
+```mermaid
+flowchart TD
+    Browser["Browser"]
+    FE["Next.js Frontend\n(port 3000)"]
+    BE["FastAPI Backend\n(port 8000)"]
+    Auth["JWT Auth +\nRole / Membership Check"]
+    DB["PostgreSQL 17 + pgvector\n(port 5432)"]
+    FS["Local Filesystem\n(UUID-keyed storage)"]
+    Embed["sentence-transformers\n(local CPU, 384-dim)"]
+    LLM["LLM Provider\n(OpenAI API / configurable)"]
+
+    Browser -->|"HTTPS + Bearer token"| FE
+    FE -->|"REST API calls"| BE
+    BE --> Auth
+    Auth -->|"authorized queries only"| DB
+    Auth --> FS
+    DB -->|"pgvector cosine search"| Embed
+    BE -->|"RAG / agent"| LLM
+    LLM -->|"answer + [SOURCE:N]"| BE
+    BE -->|"citation validation"| DB
 ```
-Browser → Next.js (3000) → FastAPI (8000) → PostgreSQL + pgvector (5432)
+
+**Request path summary:**
+```
+Browser → Next.js → FastAPI → Auth check → PostgreSQL/storage
+                                         → Embeddings → pgvector
+                                         → RAG/Agent → LLM → citation validation
 ```
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full architecture, security
-principles, and future design.
+principles, and data model.
+See [docs/INTERVIEW_GUIDE.md](docs/INTERVIEW_GUIDE.md) for design rationale and trade-offs.
+See [docs/DEMO.md](docs/DEMO.md) for the 5–7 minute interview demo script.
 
 ---
 
@@ -518,6 +546,33 @@ curl -X POST http://localhost:8000/search/embed \
 
 ---
 
+## Day 6 Scope — RAG Chat with Citations
+
+- [x] `LLMProvider` Protocol — provider-agnostic interface for answer generation
+- [x] `FakeLLMProvider` — deterministic responses for unit tests (no API calls)
+- [x] `OpenAIProvider` — real OpenAI API integration via `LLM_API_KEY`
+- [x] `get_llm_provider()` singleton — raises `LLMError` if key missing; backend starts cleanly
+- [x] `ask()` RAG pipeline — authorized retrieval → prompt → LLM → citation validation
+- [x] `build_prompt()` — structured evidence numbered `[SOURCE:1]`...`[SOURCE:N]`; conversation history bounded to `rag_history_messages`
+- [x] `_parse_and_validate_citations()` — validates `[SOURCE:N]` references against retrieved set; fabricated IDs silently discarded
+- [x] `INSUFFICIENT_EVIDENCE` sentinel — early return without LLM call when no chunks retrieved
+- [x] `Conversation` + `ConversationMessage` ORM models — Alembic migration `0005_create_conversations`
+- [x] `POST /chat/ask` — ask a question; returns answer + validated citations + `insufficient_evidence` flag
+- [x] Conversation management — list conversations, get messages, delete
+- [x] Conversation ownership verified before history read/written; ADMIN sees all
+- [x] `/chat/ask` returns 503 (not 500) when LLM provider is unavailable
+- [x] Frontend: `/chat` page with sidebar conversation history, message thread, source citations
+- [x] 21 RAG tests + 23 chat API tests; 198 total (all pass)
+- [x] No document text, prompts, or LLM responses logged
+
+### Known Limitations (Day 6)
+
+- **Real LLM untested**: all tests use `FakeLLMProvider`. Actual OpenAI API compliance with the JSON format is not tested in CI.
+- **Prompt injection**: cannot be fully prevented. Citation validation and authorization are defence-in-depth.
+- **No streaming**: LLM responses block until the full answer arrives.
+
+---
+
 ## Day 7 Scope — Secure AI Agent
 
 ### Architecture
@@ -640,6 +695,27 @@ curl -X POST http://localhost:8000/agent/run \
 
 ---
 
+## Day 8 Scope — Security Hardening
+
+- [x] `_BodySizeLimitMiddleware` — rejects requests whose `Content-Length` header exceeds `MAX_REQUEST_BODY_BYTES` before the body is read
+- [x] `_SecurityHeadersMiddleware` — adds `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy` to all responses
+- [x] Configurable CORS — `CORS_ORIGINS` env var (comma-separated or JSON array); defaults to `http://localhost:3000` only
+- [x] Conditional API docs — `DOCS_ENABLED=false` disables `/docs` and `/redoc` (recommended in production)
+- [x] Startup weak-key warning — logs `CRITICAL` if `SECRET_KEY` matches known insecure defaults
+- [x] Global exception handlers — `RequestValidationError` and unexpected exceptions return safe JSON (`{"detail": "...", "request_id": "..."}`) with no tracebacks
+- [x] HTTPBearer dependency — returns 403 for missing credentials (consistent with existing convention)
+- [x] All endpoint error paths return generic messages; no stack traces, paths, or internal details reach the client
+- [x] Security documentation in `SECURITY.md`
+- [x] Security hardening test suite (`tests/test_security_hardening.py`)
+
+### Known Limitations (Day 8)
+
+- **Chunked transfer-encoding** bypasses the body-size middleware (no `Content-Length`). Endpoint-level file validation remains the backstop.
+- **No rate limiting** in the application layer. Deploy behind nginx or a cloud gateway.
+- **TLS not in this repo** — terminate at the load balancer or reverse proxy.
+
+---
+
 ## Day 9 Scope — Observability and Production Readiness
 
 ### Request ID Correlation
@@ -751,3 +827,82 @@ Before deploying to production:
 | Token revocation / refresh tokens | Future |
 | Prometheus metrics endpoint | Future |
 | Distributed tracing | Future |
+
+---
+
+## Day 10 Scope — Final Polish and Demo Readiness
+
+- [x] Repository and architecture audit
+- [x] All quality gates rerun and verified (359 tests, ruff clean, TypeScript clean, ESLint clean, Next.js build success)
+- [x] `.env.example` completed — added missing `LLM_PROVIDER`, `LLM_MODEL`, and RAG configuration variables
+- [x] `docs/ARCHITECTURE.md` — fully updated to cover all 9 days of implementation
+- [x] `docs/INTERVIEW_GUIDE.md` — design decisions, trade-offs, and honest limitations
+- [x] `docs/DEMO.md` — repeatable 5–7 minute interview demo script with fallbacks
+- [x] README — added Day 6 scope, Day 8 scope, Mermaid architecture diagram, and links to new docs
+- [x] Security and Git hygiene review
+
+---
+
+## Troubleshooting
+
+### Backend won't start
+
+```bash
+# Check Python version (3.11+ required)
+python3 --version
+
+# Ensure venv is activated
+source backend/.venv/bin/activate
+
+# Check for missing dependencies
+pip install -r requirements.txt -r requirements-dev.txt
+
+# Check for weak SECRET_KEY warning in logs (expected in development)
+# CRITICAL: SECRET_KEY is set to a known insecure default value
+```
+
+### `alembic upgrade head` fails
+
+```bash
+# Ensure DATABASE_URL points to a running PostgreSQL instance
+echo $DATABASE_URL
+
+# Check PostgreSQL is running
+docker compose -f infra/docker-compose.yml up postgres -d
+
+# Check current migration state
+alembic current
+
+# If tables already exist from a different state:
+alembic downgrade base && alembic upgrade head
+```
+
+### Search returns 0 results
+
+1. Upload a document first (`POST /cases/{case_id}/documents`)
+2. Generate embeddings (`POST /search/embed` — ADMIN token required)
+3. Verify chunks have `embedding_status: READY` via `GET /documents/{id}/chunks`
+
+### `/chat/ask` or `/agent/run` returns 503
+
+Set `LLM_API_KEY` in your `.env` file. Without it, the backend starts cleanly
+but AI endpoints return:
+```json
+{"detail": "AI service unavailable. Configure LLM_API_KEY to enable chat."}
+```
+
+### Frontend can't reach backend
+
+Check `NEXT_PUBLIC_API_URL` in `frontend/.env.local` matches your backend address
+(default: `http://localhost:8000`).
+
+### `npx tsc --noEmit` fails
+
+```bash
+cd frontend
+npm install
+npx tsc --noEmit
+```
+
+If `frontend/lib/api.ts` is reported missing, check that it was not accidentally
+excluded by a gitignore rule: `git ls-files frontend/lib/api.ts` should return the path.
