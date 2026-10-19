@@ -478,6 +478,25 @@ function CaseDetailContent() {
           </div>
         </div>
 
+        {/* AI Timeline link */}
+        <div className="mb-6">
+          <Link
+            href={`/cases/${caseId}/timeline`}
+            className="flex items-center justify-between bg-white border border-slate-200 rounded-lg p-5 hover:border-indigo-300 transition-colors group"
+          >
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900 group-hover:text-indigo-700 transition-colors">
+                AI Timeline &amp; Contradiction Detector
+              </h2>
+              <p className="mt-0.5 text-xs text-slate-500">
+                Extract a chronological timeline and identify potential
+                discrepancies across documents.
+              </p>
+            </div>
+            <span className="text-indigo-600 text-sm shrink-0 ml-4">→</span>
+          </Link>
+        </div>
+
         {/* Documents */}
         <DocumentsSection
           caseId={caseId}

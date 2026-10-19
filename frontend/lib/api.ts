@@ -404,6 +404,47 @@ export const api = {
     },
   },
 
+  timeline: {
+    analyze(
+      caseId: string,
+      opts?: { force_reanalyze?: boolean; max_documents?: number },
+    ): Promise<AnalyzeResponse> {
+      return request<AnalyzeResponse>(`/cases/${caseId}/timeline/analyze`, {
+        method: "POST",
+        body: JSON.stringify({
+          force_reanalyze: opts?.force_reanalyze ?? false,
+          max_documents: opts?.max_documents ?? 5,
+        }),
+      });
+    },
+    getEvents(
+      caseId: string,
+      opts?: { offset?: number; limit?: number },
+    ): Promise<TimelineResponse> {
+      const params = new URLSearchParams();
+      if (opts?.offset != null) params.set("offset", String(opts.offset));
+      if (opts?.limit != null) params.set("limit", String(opts.limit));
+      const qs = params.toString() ? `?${params.toString()}` : "";
+      return request<TimelineResponse>(`/cases/${caseId}/timeline${qs}`);
+    },
+    getContradictions(caseId: string): Promise<ContradictionsResponse> {
+      return request<ContradictionsResponse>(`/cases/${caseId}/contradictions`);
+    },
+    updateContradictionReview(
+      caseId: string,
+      contradictionId: string,
+      status: ReviewStatus,
+    ): Promise<TimelineContradictionResponse> {
+      return request<TimelineContradictionResponse>(
+        `/cases/${caseId}/contradictions/${contradictionId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ review_status: status }),
+        },
+      );
+    },
+  },
+
   caseMembers: {
     list(caseId: string): Promise<CaseMembershipResponse[]> {
       return request<CaseMembershipResponse[]>(`/cases/${caseId}/members`);
@@ -463,6 +504,86 @@ export interface AgentRunResponse {
   insufficient_evidence: boolean;
   status: "success" | "error";
   error: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Timeline (Day 11)
+// ---------------------------------------------------------------------------
+
+export type ReviewStatus = "UNREVIEWED" | "REVIEWED" | "DISPUTED";
+export type ContradictionSeverity = "LOW" | "MEDIUM" | "HIGH";
+export type ContradictionCategory =
+  | "DATE_CONFLICT"
+  | "QUANTITY_CONFLICT"
+  | "FACT_CONFLICT"
+  | "STATEMENT_CONFLICT"
+  | "OTHER";
+
+export interface TimelineEventResponse {
+  id: string;
+  case_id: string;
+  source_document_id: string | null;
+  source_document_name: string | null;
+  source_chunk_id: string | null;
+  title: string;
+  description: string;
+  event_type: string;
+  event_date: string | null;
+  event_date_end: string | null;
+  date_precision: string;
+  people: string[];
+  organizations: string[];
+  source_quote: string | null;
+  source_page: number | null;
+  extraction_confidence: number;
+  review_status: ReviewStatus;
+  created_at: string;
+  ai_generated: boolean;
+}
+
+export interface TimelineResponse {
+  case_id: string;
+  events: TimelineEventResponse[];
+  total: number;
+  last_analyzed_at: string | null;
+  has_been_analyzed: boolean;
+}
+
+export interface ContradictionEvidence {
+  document_id: string | null;
+  document_name: string | null;
+  chunk_id: string | null;
+  quote: string;
+}
+
+export interface TimelineContradictionResponse {
+  id: string;
+  case_id: string;
+  category: ContradictionCategory;
+  severity: ContradictionSeverity;
+  summary: string;
+  statement_a: string;
+  evidence_a: ContradictionEvidence;
+  statement_b: string;
+  evidence_b: ContradictionEvidence;
+  confidence: number;
+  review_status: ReviewStatus;
+  created_at: string;
+  ai_generated: boolean;
+}
+
+export interface ContradictionsResponse {
+  case_id: string;
+  contradictions: TimelineContradictionResponse[];
+  total: number;
+}
+
+export interface AnalyzeResponse {
+  case_id: string;
+  documents_analyzed: number;
+  events_extracted: number;
+  contradictions_found: number;
+  message: string;
 }
 
 // ---------------------------------------------------------------------------

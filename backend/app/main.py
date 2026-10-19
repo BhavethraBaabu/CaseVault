@@ -61,6 +61,7 @@ from app.api.v1.clients import router as clients_router
 from app.api.v1.documents import router as documents_router
 from app.api.v1.health import router as health_router
 from app.api.v1.search import router as search_router
+from app.api.v1.timeline import router as timeline_router
 from app.core.config import settings
 from app.core.logging_config import configure_logging
 from app.core.request_context import (
@@ -312,3 +313,4 @@ app.include_router(documents_router)
 app.include_router(search_router)
 app.include_router(chat_router)
 app.include_router(agent_router)
+app.include_router(timeline_router)
