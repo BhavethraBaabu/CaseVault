@@ -133,6 +133,20 @@ Internet / Browser
 | Path-traversal guard | `_safe_path()` resolves and validates inside base_dir | `services/storage.py` |
 | No storage paths in API | `storage_key` excluded from all response schemas | `schemas/document.py` |
 
+### AI Case Timeline and Contradiction Detector
+
+| Control | Implementation | File |
+|---|---|---|
+| Authorization before document access | `_get_authorized_documents()` uses CaseMembership JOIN/WHERE | `services/timeline.py` |
+| Source-quote verification | Every `source_quote` verified as exact substring of chunk text | `services/timeline.py` |
+| Hallucinated quotes rejected | Quotes not found in source text are silently discarded, never persisted | `services/timeline.py` |
+| OWNER/MEMBER gate on analysis | `require_case_role(OWNER, MEMBER)` on POST analyze and PATCH review | `api/v1/timeline.py` |
+| Cross-case access prevention | `case_id` always in WHERE clause for event/contradiction queries | `services/timeline.py` |
+| Max documents bound | `max_documents` (1–10) limits LLM calls and prompt exposure per request | `services/timeline.py` |
+| AI uncertainty labelled | `ai_generated=True` on all response objects; disclaimer in frontend | `api/v1/timeline.py` |
+| No full document text in logs | Source chunks are passed to LLM but never written to logs | `services/timeline.py` |
+| Single-case document scope | Documents from other cases structurally cannot enter the prompt | `services/timeline.py` |
+
 ### HTTP / API Hardening (Day 8)
 
 | Control | Implementation | File |
@@ -251,6 +265,9 @@ python -m pytest tests/ -v
 
 # Security hardening tests only
 python -m pytest tests/test_security_hardening.py -v
+
+# Timeline security tests
+python -m pytest tests/test_timeline.py -v
 
 # Static analysis
 python -m ruff check .

@@ -228,6 +228,77 @@ drops it silently and does not return a fabricated citation.
 
 ---
 
+## How the AI Case Timeline and Contradiction Detector Work
+
+### Pipeline Overview
+
+```
+POST /cases/{case_id}/timeline/analyze  (OWNER or MEMBER)
+  │
+  ├── Phase 1: Event extraction
+  │     For each authorized READY document (up to max_documents=10):
+  │       - Build extraction prompt (document name + up to 3 chunks + 6000 chars)
+  │       - LLM.generate() → JSON [{title, event_date, source_quote, ...}]
+  │       - _verify_quote(): reject any quote not in source chunk text
+  │       - Persist validated TimelineEvent records (review_status=UNREVIEWED)
+  │
+  └── Phase 2: Contradiction detection (one LLM call)
+        - Build prompt from all extracted events with 300-char excerpts
+        - LLM.generate() → JSON [{summary, severity, source_quote_a, source_quote_b, ...}]
+        - Verify both quotes in source texts
+        - Persist validated TimelineContradiction records
+```
+
+### Quote Verification (critical security invariant)
+
+The LLM can hallucinate quotes that never appeared in the source document.
+
+`_verify_quote()` performs an exact substring check:
+```python
+def _verify_quote(quote: str, source_text: str) -> bool:
+    return bool(quote) and quote in source_text
+```
+
+Only quotes that are verbatim substrings of the source chunk text are persisted.
+This means:
+- A crafted document cannot cause the system to attribute a fabricated quote to itself.
+- A prompt-injected LLM response that invents a quote is harmlessly discarded.
+- The trade-off: minor paraphrasing by the LLM causes rejection. This is intentional — conservative grounding is safer than accepting approximate matches.
+
+### Uncertainty Handling
+
+Timeline results carry explicit uncertainty markers:
+- `ai_generated=True` on every API response object
+- `extraction_confidence` and `confidence` fields (model-estimated; not calibrated probabilities)
+- Review states: UNREVIEWED → REVIEWED | DISPUTED
+- Frontend disclaimer banner on the timeline page
+- Analyze response message: "All results require human review"
+
+### Authorization
+
+The timeline service uses the same authorization-before-retrieval pattern:
+
+```python
+query = (
+    db.query(Document)
+    .filter(Document.case_id == case_id, Document.status == DocumentStatus.READY)
+    .join(CaseMembership, CaseMembership.case_id == Document.case_id)
+    .filter(CaseMembership.user_id == user.id)
+    .limit(max_documents)
+    .all()
+)
+```
+
+Documents from other cases are structurally impossible to include. Cross-case
+event or contradiction access is prevented by `case_id` in every WHERE clause.
+
+### VIEWER vs. MEMBER permissions
+
+- GET timeline and GET contradictions: any case member (VIEWER and above)
+- POST analyze and PATCH contradiction review: OWNER or MEMBER only
+
+---
+
 ## How the Agent Selects and Validates Tools
 
 ### Tool Allowlist

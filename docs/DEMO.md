@@ -312,7 +312,88 @@ pytest tests/test_agent.py tests/test_agent_tools.py -v
 
 ---
 
-## Step 9 — Permission Boundary Demo
+## Step 9 — AI Case Timeline and Contradiction Detector
+
+**Action:**
+```bash
+# Trigger timeline analysis (requires LLM key; OWNER or MEMBER only)
+curl -s -X POST "http://localhost:8000/cases/$CASE_ID/timeline/analyze" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"max_documents": 5, "force_reanalyze": false}' | python3 -m json.tool
+
+# Retrieve extracted events
+curl -s "http://localhost:8000/cases/$CASE_ID/timeline" \
+  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
+
+# Retrieve potential contradictions
+curl -s "http://localhost:8000/cases/$CASE_ID/contradictions" \
+  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
+```
+
+**Action (UI):** Navigate to Cases → Vendor Contract Review → Timeline.
+Click "Run Analysis". Events appear on the vertical timeline; any contradictions
+appear on the Contradictions tab.
+
+**Expected result (with two-document setup from Step 4):**
+```json
+{
+  "case_id": "...",
+  "documents_analyzed": 2,
+  "events_extracted": 5,
+  "contradictions_found": 1,
+  "message": "Analysis complete. 5 event(s) extracted from 2 document(s). 1 potential discrepancy(s) identified. All results require human review."
+}
+```
+
+**Concept to explain:**
+- **Two-phase pipeline**: Phase 1 calls the LLM once per document to extract events.
+  Phase 2 makes one call with all events to detect cross-document contradictions.
+- **Quote verification**: every `source_quote` returned by the LLM is checked as an
+  exact substring of the source chunk text. Hallucinated quotes are silently discarded.
+  The LLM cannot attribute a fabricated quote to a real document.
+- **Uncertainty disclosure**: `ai_generated=true` on every record; `extraction_confidence`
+  and `confidence` are surfaced. The UI shows a prominent disclaimer.
+- **Review workflow**: contradictions start as UNREVIEWED. OWNER/MEMBER can mark them
+  REVIEWED or DISPUTED. VIEWER role can only read.
+- **Authorization before content**: the service fetches documents via the same
+  `CaseMembership JOIN/WHERE` pattern used everywhere — no documents from other
+  cases can enter the prompt.
+
+**Fallback (no LLM key):**
+```bash
+pytest tests/test_timeline.py -v
+# 60 tests covering extraction, quote verification, authorization, API auth
+```
+
+---
+
+## Step 9b — Review a Contradiction
+
+**Action:**
+```bash
+# Get the contradiction ID
+CONTRA_ID=$(curl -s "http://localhost:8000/cases/$CASE_ID/contradictions" \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['contradictions'][0]['id'])")
+
+# Mark it as reviewed
+curl -s -X PATCH "http://localhost:8000/cases/$CASE_ID/contradictions/$CONTRA_ID" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"review_status": "REVIEWED"}' | python3 -m json.tool
+```
+
+**Action (UI):** Expand a contradiction card → click "REVIEWED".
+
+**Concept to explain:**
+- The PATCH endpoint enforces `case_id` in the SQL WHERE clause — cross-case access
+  is impossible even if you supply a contradiction ID from a different case.
+- VIEWER role returns 403 from `require_case_role(OWNER, MEMBER)`.
+
+---
+
+## Step 10 — Permission Boundary Demo
 
 **Concept to explain:** Authorization is enforced server-side, not just hidden in the UI.
 
@@ -344,15 +425,15 @@ curl -s -X POST http://localhost:8000/search \
 
 ---
 
-## Step 10 — Quality Gates Summary
+## Step 11 — Quality Gates Summary
 
 Show the verified test results:
 
 ```bash
-# All 359 backend tests
+# All 419 backend tests
 cd backend && source .venv/bin/activate
 pytest --tb=short -q
-# 359 passed in ~150s
+# 419 passed in ~170s
 
 # Ruff (Python lint)
 ruff check .
@@ -368,7 +449,7 @@ npm run lint
 
 # Production build
 npm run build
-# ✓ Generating static pages (12/12)
+# ✓ Generating static pages (13/13)
 ```
 
 ---
@@ -377,12 +458,13 @@ npm run build
 
 If asked about production readiness, be transparent:
 
-1. **Real LLM not tested**: All 359 tests use `FakeLLMProvider` / `FakeSequentialProvider`. Real OpenAI API compliance with the JSON-in-prompt format is not verified in automated tests.
+1. **Real LLM not tested**: All 419 tests use `FakeLLMProvider` / `FakeSequentialProvider`. Real OpenAI API compliance with the JSON-in-prompt format is not verified in automated tests. This includes the timeline extraction JSON format.
 2. **PostgreSQL + pgvector not live-tested**: All tests use SQLite in-memory. pgvector operators, HNSW index, and Alembic migrations have not been exercised against a live PostgreSQL in CI.
 3. **No JWT revocation**: Logout is client-side. A stolen token remains valid until expiry.
 4. **No rate limiting**: Brute-force on `/auth/login` is unprotected at the application layer. Requires a reverse proxy.
-5. **Synchronous extraction**: Large documents block the HTTP worker. No background queue.
-6. **Prompt injection**: Cannot be fully prevented. The backend validates citations and authorization regardless of LLM output.
+5. **Synchronous extraction and analysis**: Large documents block the HTTP worker. Timeline analysis also blocks. No background queue.
+6. **Prompt injection**: Cannot be fully prevented. The backend validates citations and authorization regardless of LLM output. Quote verification ensures hallucinated sources cannot be persisted, but output content can still be influenced.
+7. **Timeline quote verification is exact-match**: Minor LLM paraphrasing causes events to be discarded (conservative by design).
 
 ---
 
@@ -399,3 +481,5 @@ If asked about production readiness, be transparent:
 | Agent | Tool allowlist; per-call authorization; JSON-in-prompt tool calling |
 | Observability | ContextVar request ID; structured logging; liveness vs. readiness |
 | Security | Defence-in-depth; configurable CORS; security headers; safe errors |
+| Timeline | Two-phase LLM pipeline; quote verification; ai_generated flag; review workflow |
+| Contradictions | Cross-document detection; severity ranking; source evidence grounding |

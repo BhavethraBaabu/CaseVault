@@ -7,10 +7,11 @@ It combines structured case and document management with AI-powered semantic
 document retrieval, enabling attorneys to surface relevant precedents and case
 facts instantly.
 
-> **Day 10 status:** Final polish, validation, and demo readiness complete.
-> 359 backend tests pass. All quality gates green.
-> See [docs/DEMO.md](docs/DEMO.md) for the interview demo walkthrough and
-> [docs/INTERVIEW_GUIDE.md](docs/INTERVIEW_GUIDE.md) for architecture trade-offs.
+> **Day 11 status:** AI Case Timeline and Contradiction Detector complete.
+> 419 backend tests pass. All quality gates green.
+> See [docs/DEMO_GUIDE.md](docs/DEMO_GUIDE.md) for the concise demo walkthrough,
+> [docs/DEMO.md](docs/DEMO.md) for the full interview demo script, and
+> [docs/INTERVIEW_NOTES.md](docs/INTERVIEW_NOTES.md) for architecture trade-offs.
 
 ---
 
@@ -26,6 +27,7 @@ flowchart TD
     FS["Local Filesystem\n(UUID-keyed storage)"]
     Embed["sentence-transformers\n(local CPU, 384-dim)"]
     LLM["LLM Provider\n(OpenAI API / configurable)"]
+    Timeline["Timeline Service\nEvent extraction +\nContradiction detection"]
 
     Browser -->|"HTTPS + Bearer token"| FE
     FE -->|"REST API calls"| BE
@@ -36,6 +38,9 @@ flowchart TD
     BE -->|"RAG / agent"| LLM
     LLM -->|"answer + [SOURCE:N]"| BE
     BE -->|"citation validation"| DB
+    BE --> Timeline
+    Timeline -->|"authorized documents only"| LLM
+    Timeline -->|"verified events + contradictions"| DB
 ```
 
 **Request path summary:**
@@ -47,8 +52,9 @@ Browser → Next.js → FastAPI → Auth check → PostgreSQL/storage
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full architecture, security
 principles, and data model.
-See [docs/INTERVIEW_GUIDE.md](docs/INTERVIEW_GUIDE.md) for design rationale and trade-offs.
-See [docs/DEMO.md](docs/DEMO.md) for the 5–7 minute interview demo script.
+See [docs/INTERVIEW_NOTES.md](docs/INTERVIEW_NOTES.md) for design rationale and trade-offs.
+See [docs/DEMO_GUIDE.md](docs/DEMO_GUIDE.md) for the concise demo reference.
+See [docs/DEMO.md](docs/DEMO.md) for the full 5–7 minute interview demo script.
 
 ---
 
@@ -92,7 +98,10 @@ CaseVault/
 │   └── postgres/
 │       └── init.sql        # pgvector initialization
 ├── docs/
-│   └── ARCHITECTURE.md
+│   ├── ARCHITECTURE.md
+│   ├── DEMO.md
+│   ├── DEMO_GUIDE.md
+│   └── INTERVIEW_NOTES.md
 ├── .env.example            # Environment variable template
 ├── .gitignore
 └── README.md
@@ -830,10 +839,33 @@ Before deploying to production:
 
 ---
 
+## Day 11 Scope — AI Case Timeline and Contradiction Detector
+
+- [x] `TimelineEvent` + `TimelineContradiction` ORM models — Alembic migration `0006_create_timeline_tables`
+- [x] `analyze_case_timeline()` — two-phase pipeline: per-document event extraction + cross-document contradiction detection
+- [x] Source-quote verification — LLM-hallucinated quotes rejected before persistence; only exact substrings of source text are stored
+- [x] `POST /cases/{case_id}/timeline/analyze` — OWNER/MEMBER only; returns summary of events + contradictions found
+- [x] `GET /cases/{case_id}/timeline` — paginated chronological events (VIEWER and above)
+- [x] `GET /cases/{case_id}/timeline/events/{event_id}` — single event with source evidence
+- [x] `GET /cases/{case_id}/contradictions` — severity-ranked discrepancy list
+- [x] `PATCH /cases/{case_id}/contradictions/{contradiction_id}` — update review status (OWNER/MEMBER)
+- [x] Frontend: `/cases/[id]/timeline` — vertical timeline, contradiction cards, review controls
+- [x] AI disclaimer prominently displayed — results require human review
+- [x] 60 new tests; 419 total (all pass)
+
+### Known Limitations (Day 11)
+
+- **Real LLM untested**: all timeline tests use `FakeLLMProvider`. Real LLM JSON extraction compliance is not verified in automated tests.
+- **Synchronous analysis**: `POST /analyze` blocks the HTTP worker. For large cases, a background task queue is recommended.
+- **Quote verification is exact-match**: case-sensitive substring check. Minor LLM paraphrasing causes quotes to be rejected (conservative by design).
+- **Bounded by max_documents**: analysis covers at most 10 documents per request to bound LLM cost.
+
+---
+
 ## Day 10 Scope — Final Polish and Demo Readiness
 
 - [x] Repository and architecture audit
-- [x] All quality gates rerun and verified (359 tests, ruff clean, TypeScript clean, ESLint clean, Next.js build success)
+- [x] All quality gates rerun and verified (359 tests at Day 10; 419 total including Day 11, ruff clean, TypeScript clean, ESLint clean, Next.js build success)
 - [x] `.env.example` completed — added missing `LLM_PROVIDER`, `LLM_MODEL`, and RAG configuration variables
 - [x] `docs/ARCHITECTURE.md` — fully updated to cover all 9 days of implementation
 - [x] `docs/INTERVIEW_GUIDE.md` — design decisions, trade-offs, and honest limitations
