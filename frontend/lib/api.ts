@@ -172,6 +172,8 @@ export interface AskRequest {
   case_id?: string | null;
 }
 
+export type CitationVerificationStatus = "verified" | "unverified" | "invalid";
+
 export interface SourceCitation {
   document_id: string;
   document_name: string;
@@ -182,6 +184,30 @@ export interface SourceCitation {
   excerpt: string;
   /** Cosine similarity in [0, 1]. */
   similarity: number;
+  /**
+   * "verified"   — source resolves AND any quoted passage matches the stored text.
+   * "unverified" — source resolves but no exact quotation was detected.
+   * "invalid"    — a detected quotation does NOT appear in the stored text.
+   */
+  verification_status: CitationVerificationStatus;
+  /** Explanation of what was verified. */
+  verification_note: string;
+  /** Quoted text extracted from the AI answer near this citation, if any. */
+  quoted_text: string | null;
+}
+
+export interface SourceDetailResponse {
+  chunk_id: string;
+  document_id: string;
+  document_name: string;
+  case_id: string;
+  chunk_index: number;
+  page_number: number | null;
+  /** Full stored chunk text (re-fetched from database). */
+  content: string;
+  verification_status: CitationVerificationStatus;
+  verification_note: string;
+  quoted_text: string | null;
 }
 
 export interface AskResponse {
@@ -392,6 +418,14 @@ export const api = {
     },
     deleteConversation(conversationId: string): Promise<void> {
       return request<void>(`/chat/conversations/${conversationId}`, { method: "DELETE" });
+    },
+    /**
+     * Re-fetch and re-verify a cited chunk from the server.
+     * Optionally supply quotedText to check whether it appears in the source.
+     */
+    getSourceDetail(chunkId: string, quotedText?: string): Promise<SourceDetailResponse> {
+      const params = quotedText ? `?quoted_text=${encodeURIComponent(quotedText)}` : "";
+      return request<SourceDetailResponse>(`/chat/sources/${chunkId}${params}`);
     },
   },
 

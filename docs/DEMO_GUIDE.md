@@ -155,7 +155,7 @@ curl -s -X POST $BASE/search \
 
 ---
 
-## RAG Chat
+## RAG Chat + Citation Verification
 
 ```bash
 curl -s -X POST $BASE/chat/ask \
@@ -165,9 +165,28 @@ curl -s -X POST $BASE/chat/ask \
   | python3 -m json.tool
 ```
 
-**UI:** Navigate to Chat → select case → ask question.
+Each source in the response now includes `verification_status`:
+- **`verified`** — quoted text in the answer matches the stored source.
+- **`unverified`** — source resolves but no exact quote was detected.
+- **`invalid`** — a quoted passage was found but does not match the stored source.
 
-**Without LLM key:** Returns 503 — not a crash. Show `pytest tests/test_rag.py -v`.
+**UI:** Navigate to Chat → select case → ask question.
+Click any source card to open the citation detail modal. The modal re-fetches and re-verifies the source live from the database.
+
+**Source detail endpoint:**
+```bash
+CHUNK_ID="<chunk_id from sources[0].chunk_id>"
+
+# Re-verify without a quoted passage
+curl -s "$BASE/chat/sources/$CHUNK_ID" \
+  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
+
+# Re-verify with a quoted passage
+curl -s "$BASE/chat/sources/$CHUNK_ID?quoted_text=paid+within+30+days" \
+  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
+```
+
+**Without LLM key:** Returns 503 — not a crash. Show `pytest tests/test_citation_verification.py -v`.
 
 ---
 
@@ -259,7 +278,7 @@ curl -s -X POST "$BASE/cases/$CASE_ID/timeline/analyze" \
 ## Quality Gates (run these during demo)
 
 ```bash
-# Backend tests (419 total)
+# Backend tests (439 total)
 cd backend && source .venv/bin/activate
 pytest --tb=short -q
 
@@ -289,6 +308,7 @@ npm run build
 | Embeddings | Local model, no API key, HNSW index, `vector(384)` column |
 | Search | Authorization in SQL before `ORDER BY distance LIMIT k` |
 | RAG | Server-side citation validation — fabricated [SOURCE:N] silently dropped |
+| Citation verification | verified/unverified/invalid per citation; deterministic substring match; LLM cannot inject status |
 | Agent | Tool allowlist; per-call authorization; JSON-in-prompt tool calling |
 | Timeline | Quote verification — hallucinated sources rejected before persistence |
 | Contradictions | Cross-document detection; severity ranking; review workflow |

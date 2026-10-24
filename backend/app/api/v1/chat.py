@@ -32,11 +32,13 @@ Security
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
+from app.models.case_membership import CaseMembership
 from app.models.conversation import Conversation
+from app.models.document import Document, DocumentChunk
 from app.models.user import User, UserRole
 from app.schemas.chat import (
     AskRequest,
@@ -44,6 +46,7 @@ from app.schemas.chat import (
     ConversationResponse,
     MessageResponse,
     SourceCitation,
+    SourceDetailResponse,
 )
 from app.services.llm_provider import LLMError
 from app.services.rag import RagSource, ask
@@ -200,6 +203,109 @@ def delete_conversation(
 
 
 # ---------------------------------------------------------------------------
+# Source citation detail
+# ---------------------------------------------------------------------------
+
+
+@router.get("/sources/{chunk_id}", response_model=SourceDetailResponse)
+def get_source_detail(
+    chunk_id: uuid.UUID,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    quoted_text: Annotated[str | None, Query(max_length=2000)] = None,
+) -> SourceDetailResponse:
+    """
+    Retrieve and re-verify a cited document chunk by its chunk ID.
+
+    Re-fetches the chunk from the database and re-checks authorization,
+    so the response always reflects the current state of the stored source.
+    Returns HTTP 404 if the chunk does not exist or the user is not
+    authorized to access its case (resource-hiding).
+
+    Optional query parameter `quoted_text` (max 2000 chars): if supplied,
+    verification_status reflects whether the text appears verbatim
+    (case-insensitive) in the stored chunk content.  If omitted, status is
+    "unverified" — the source reference resolves but there is no quotation
+    to check.
+
+    Authorization:
+      - ADMIN: unrestricted access to any chunk.
+      - Others: must hold a CaseMembership for the chunk's document's case.
+
+    Security:
+      - chunk_id is trusted only to look up data; the case membership check
+        is always enforced independently.
+      - quoted_text is never logged or stored.
+    """
+    # Load chunk and its parent document
+    chunk = db.get(DocumentChunk, chunk_id)
+    if chunk is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Source not found.",
+        )
+
+    doc = db.get(Document, chunk.document_id)
+    if doc is None:
+        # Should not occur due to FK constraint, but be defensive.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Source not found.",
+        )
+
+    # Authorization: verify the user can access this case.
+    if current_user.role != UserRole.ADMIN:
+        membership = (
+            db.query(CaseMembership)
+            .filter(
+                CaseMembership.case_id == doc.case_id,
+                CaseMembership.user_id == current_user.id,
+            )
+            .first()
+        )
+        if membership is None:
+            # Resource-hiding: return 404 rather than 403.
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Source not found.",
+            )
+
+    # Quotation verification
+    if quoted_text is not None:
+        if quoted_text.lower() in chunk.content.lower():
+            v_status = "verified"
+            v_note = (
+                "Source reference resolves and the quoted passage was found "
+                "verbatim in the stored source text."
+            )
+        else:
+            v_status = "invalid"
+            v_note = (
+                "The quoted passage does not appear in the stored source text. "
+                "The AI may have misquoted or paraphrased the source."
+            )
+    else:
+        v_status = "unverified"
+        v_note = (
+            "Source reference resolves to an authorized chunk. "
+            "No exact quotation was supplied for verification."
+        )
+
+    return SourceDetailResponse(
+        chunk_id=chunk.id,
+        document_id=doc.id,
+        document_name=doc.original_filename,
+        case_id=doc.case_id,
+        chunk_index=chunk.chunk_index,
+        page_number=chunk.page_number,
+        content=chunk.content,
+        verification_status=v_status,
+        verification_note=v_note,
+        quoted_text=quoted_text,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -235,4 +341,7 @@ def _to_source_citation(src: RagSource) -> SourceCitation:
         page_number=src.page_number,
         excerpt=src.excerpt,
         similarity=src.similarity,
+        verification_status=src.verification_status,
+        verification_note=src.verification_note,
+        quoted_text=src.quoted_text,
     )

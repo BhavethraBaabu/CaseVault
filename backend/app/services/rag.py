@@ -76,9 +76,18 @@ class RagSource:
     chunk_id: uuid.UUID
     chunk_index: int
     page_number: int | None
-    # Short excerpt — the full chunk content from the authorized retrieval set.
+    # Full chunk content from the authorized retrieval set.
     excerpt: str
     similarity: float
+    # Citation verification —————————————————————————————————————————————
+    # "verified"   — source resolves AND any nearby quoted passage matches.
+    # "unverified" — source resolves but no exact quotation was detected.
+    # "invalid"    — source resolves but a detected quotation does NOT match.
+    verification_status: str
+    verification_note: str
+    # The quoted passage extracted from the LLM answer near this citation,
+    # or None when no quoted passage was found.
+    quoted_text: str | None = None
 
 
 @dataclass
@@ -311,20 +320,48 @@ _build_system_prompt = build_prompt
 # Citation parsing and validation
 # ---------------------------------------------------------------------------
 
+# Matches double-quoted passages with 5–500 characters of content.
+_QUOTE_PATTERN = re.compile(r'"([^"]{5,500})"')
+# Characters either side of [SOURCE:N] to scan for nearby quoted passages.
+_QUOTE_WINDOW = 500
+
+
+def _extract_nearby_quote(text: str, ref_start: int) -> str | None:
+    """
+    Extract the first double-quoted passage within _QUOTE_WINDOW chars of ref_start.
+
+    Returns the quoted content (without surrounding quotes), or None if no
+    qualifying quoted passage is found within the search window.
+    Only quotes with 5–500 characters of content are matched.
+    """
+    lo = max(0, ref_start - _QUOTE_WINDOW)
+    hi = min(len(text), ref_start + _QUOTE_WINDOW)
+    m = _QUOTE_PATTERN.search(text[lo:hi])
+    return m.group(1) if m else None
+
 
 def _parse_and_validate_citations(
     answer: str,
     chunks: list[SearchResult],
 ) -> list[RagSource]:
     """
-    Extract [SOURCE:N] references from the answer and validate them.
+    Extract [SOURCE:N] references from the answer, validate them, and verify quotations.
 
-    Only references whose N is within the valid range [1..len(chunks)] are
-    kept.  Out-of-range or duplicate references are silently discarded.
+    For each valid [SOURCE:N] reference:
+      - If a double-quoted passage is detected near the citation marker:
+          - verified   — the quoted text is found (case-insensitive) in the chunk.
+          - invalid    — the quoted text is NOT found in the chunk.
+      - If no quoted passage is nearby:
+          - unverified — the source reference resolves but there is no exact text
+                         to verify.
 
-    This application-side validation ensures that:
+    Out-of-range and duplicate references are silently discarded.
+
+    Application-side invariants:
       - Fabricated source IDs never reach the client.
       - Only chunks from the authorized retrieval set appear as citations.
+      - Verification is deterministic (substring match); the LLM cannot inject
+        a 'verified' status.
     """
     pattern = re.compile(r"\[SOURCE:(\d+)\]")
     seen: set[int] = set()
@@ -336,6 +373,29 @@ def _parse_and_validate_citations(
             continue
         seen.add(n)
         chunk = chunks[n - 1]
+
+        quoted = _extract_nearby_quote(answer, match.start())
+
+        if quoted is not None:
+            if quoted.lower() in chunk.content.lower():
+                v_status = "verified"
+                v_note = (
+                    "Source reference resolves and the quoted passage was found "
+                    "verbatim in the stored source text."
+                )
+            else:
+                v_status = "invalid"
+                v_note = (
+                    "The quoted passage does not appear in the stored source text. "
+                    "The AI may have misquoted or paraphrased the source."
+                )
+        else:
+            v_status = "unverified"
+            v_note = (
+                "Source reference resolves to an authorized chunk. "
+                "No exact quotation was detected near this citation."
+            )
+
         sources.append(
             RagSource(
                 document_id=chunk.document_id,
@@ -346,6 +406,9 @@ def _parse_and_validate_citations(
                 page_number=chunk.page_number,
                 excerpt=chunk.content,
                 similarity=chunk.similarity,
+                verification_status=v_status,
+                verification_note=v_note,
+                quoted_text=quoted,
             )
         )
     return sources
