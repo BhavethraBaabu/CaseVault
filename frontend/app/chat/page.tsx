@@ -23,7 +23,7 @@ import { useRouter } from "next/navigation";
 
 import Navbar from "@/components/Navbar";
 import { useAuth } from "@/context/AuthContext";
-import { ApiError, AskResponse, CaseResponse, ConversationResponse, SourceCitation, api } from "@/lib/api";
+import { ApiError, AskResponse, CaseResponse, CitationVerificationStatus, ConversationResponse, SourceCitation, SourceDetailResponse, api } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -54,6 +54,7 @@ export default function ChatPage() {
 
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeSource, setActiveSource] = useState<SourceCitation | null>(null);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -195,6 +196,10 @@ export default function ChatPage() {
     <div className="min-h-screen flex flex-col bg-slate-50">
       <Navbar />
 
+      {activeSource && (
+        <CitationModal source={activeSource} onClose={() => setActiveSource(null)} />
+      )}
+
       <div className="flex flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6 gap-6">
         {/* Sidebar: conversations */}
         <aside className="hidden lg:flex flex-col w-64 shrink-0 gap-3">
@@ -307,6 +312,7 @@ export default function ChatPage() {
                   content={msg.content}
                   sources={msg.sources ?? []}
                   insufficientEvidence={msg.insufficient_evidence ?? false}
+                  onViewSource={setActiveSource}
                 />
               ),
             )}
@@ -383,10 +389,12 @@ function AssistantMessage({
   content,
   sources,
   insufficientEvidence,
+  onViewSource,
 }: {
   content: string;
   sources: SourceCitation[];
   insufficientEvidence: boolean;
+  onViewSource: (source: SourceCitation) => void;
 }) {
   const [showSources, setShowSources] = useState(false);
 
@@ -419,7 +427,7 @@ function AssistantMessage({
             {showSources && (
               <div className="mt-2 space-y-2">
                 {sources.map((src, i) => (
-                  <SourceCard key={src.chunk_id} source={src} index={i + 1} />
+                  <SourceCard key={src.chunk_id} source={src} index={i + 1} onViewDetail={onViewSource} />
                 ))}
               </div>
             )}
@@ -430,28 +438,87 @@ function AssistantMessage({
   );
 }
 
-function SourceCard({ source, index }: { source: SourceCitation; index: number }) {
+const VERIFICATION_CONFIG: Record<
+  CitationVerificationStatus,
+  { label: string; badgeClass: string; dotClass: string }
+> = {
+  verified: {
+    label: "Verified",
+    badgeClass: "bg-green-100 text-green-800",
+    dotClass: "bg-green-500",
+  },
+  unverified: {
+    label: "Unverified",
+    badgeClass: "bg-amber-100 text-amber-800",
+    dotClass: "bg-amber-500",
+  },
+  invalid: {
+    label: "Invalid",
+    badgeClass: "bg-red-100 text-red-800",
+    dotClass: "bg-red-500",
+  },
+};
+
+function SourceCard({
+  source,
+  index,
+  onViewDetail,
+}: {
+  source: SourceCitation;
+  index: number;
+  onViewDetail: (source: SourceCitation) => void;
+}) {
   const similarityPct = Math.round(source.similarity * 100);
+  const vConfig =
+    VERIFICATION_CONFIG[source.verification_status as CitationVerificationStatus] ?? {
+      label: "Unknown",
+      badgeClass: "bg-slate-100 text-slate-600",
+      dotClass: "bg-slate-400",
+    };
 
   return (
-    <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+    <div
+      className="bg-slate-50 border border-slate-200 rounded-lg p-3 cursor-pointer hover:bg-indigo-50 hover:border-indigo-200 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500"
+      role="button"
+      tabIndex={0}
+      onClick={() => onViewDetail(source)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onViewDetail(source);
+        }
+      }}
+      aria-label={`View citation details for ${source.document_name}. Status: ${vConfig.label}`}
+    >
       <div className="flex items-start justify-between gap-3 mb-1.5">
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-xs font-mono text-slate-400">[{index}]</span>
             <span className="text-xs font-semibold text-slate-800 truncate">
               {source.document_name}
             </span>
-            {source.page_number != null && (
+            {source.page_number != null ? (
               <span className="text-xs text-slate-500">p. {source.page_number}</span>
+            ) : (
+              <span className="text-xs text-slate-400">chunk {source.chunk_index + 1}</span>
             )}
           </div>
-          <Link
-            href={`/cases/${source.case_id}`}
-            className="text-xs text-indigo-600 hover:text-indigo-800 transition-colors"
-          >
-            View case
-          </Link>
+          <div className="flex items-center gap-2 mt-1">
+            <span
+              className={`inline-flex items-center gap-1 text-xs font-medium px-1.5 py-0.5 rounded-full ${vConfig.badgeClass}`}
+              aria-label={`Verification status: ${vConfig.label}`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${vConfig.dotClass}`} aria-hidden="true" />
+              {vConfig.label}
+            </span>
+            <Link
+              href={`/cases/${source.case_id}`}
+              className="text-xs text-indigo-600 hover:text-indigo-800 transition-colors"
+              onClick={(e) => e.stopPropagation()}
+            >
+              View case
+            </Link>
+          </div>
         </div>
         <span
           className={`shrink-0 text-xs font-semibold px-2 py-0.5 rounded-full ${
@@ -466,6 +533,193 @@ function SourceCard({ source, index }: { source: SourceCitation; index: number }
         </span>
       </div>
       <p className="text-xs text-slate-600 leading-relaxed line-clamp-3">{source.excerpt}</p>
+      <p className="text-xs text-slate-400 mt-1.5">Click to view full source</p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Citation modal
+// ---------------------------------------------------------------------------
+
+function VerificationBadge({
+  status,
+  note,
+  loading,
+}: {
+  status: string;
+  note: string;
+  loading: boolean;
+}) {
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 text-xs text-slate-500" aria-live="polite" aria-label="Verifying source">
+        <span className="w-3 h-3 rounded-full border-2 border-slate-200 border-t-indigo-500 animate-spin" aria-hidden="true" />
+        Re-verifying source…
+      </div>
+    );
+  }
+
+  const cfg =
+    VERIFICATION_CONFIG[status as CitationVerificationStatus] ?? {
+      label: "Unknown",
+      badgeClass: "bg-slate-100 text-slate-600",
+      dotClass: "bg-slate-400",
+    };
+
+  return (
+    <div>
+      <span
+        className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full ${cfg.badgeClass}`}
+        aria-label={`Verification status: ${cfg.label}`}
+      >
+        <span className={`w-2 h-2 rounded-full ${cfg.dotClass}`} aria-hidden="true" />
+        {cfg.label}
+      </span>
+      <p className="mt-1.5 text-xs text-slate-500 leading-snug">{note}</p>
+    </div>
+  );
+}
+
+function CitationModal({
+  source,
+  onClose,
+}: {
+  source: SourceCitation;
+  onClose: () => void;
+}) {
+  const [freshDetail, setFreshDetail] = useState<SourceDetailResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+
+  // Re-fetch from server to get current state and fresh verification.
+  useEffect(() => {
+    let mounted = true;
+    api.chat
+      .getSourceDetail(source.chunk_id, source.quoted_text ?? undefined)
+      .then((data) => {
+        if (mounted) {
+          setFreshDetail(data);
+          setLoading(false);
+        }
+      })
+      .catch(() => {
+        if (mounted) {
+          setFetchError("Could not re-verify source. The document may have been deleted or is unavailable.");
+          setLoading(false);
+        }
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [source.chunk_id, source.quoted_text]);
+
+  // Close on Escape key.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  // Use fresh data when available, fall back to existing citation data.
+  const displayStatus = freshDetail?.verification_status ?? source.verification_status;
+  const displayNote = freshDetail?.verification_note ?? source.verification_note;
+  const displayContent = freshDetail?.content ?? source.excerpt;
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Source citation detail"
+    >
+      <div
+        className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[80vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Modal header */}
+        <div className="flex items-start justify-between p-5 border-b border-slate-100">
+          <div className="min-w-0 flex-1 pr-4">
+            <h2 className="text-base font-semibold text-slate-900 truncate">
+              {source.document_name}
+            </h2>
+            <p className="text-sm text-slate-500 mt-0.5">
+              {source.page_number != null
+                ? `Page ${source.page_number}`
+                : `Chunk ${source.chunk_index + 1}`}
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="shrink-0 w-7 h-7 flex items-center justify-center rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors text-lg leading-none"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="p-5 space-y-5">
+          {/* Verification status */}
+          <div>
+            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
+              Verification Status
+            </h3>
+            <VerificationBadge
+              status={displayStatus}
+              note={displayNote}
+              loading={loading && !freshDetail}
+            />
+          </div>
+
+          {/* Quoted text (from AI answer) */}
+          {source.quoted_text && (
+            <div>
+              <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
+                Quoted in AI Answer
+              </h3>
+              <blockquote className="border-l-4 border-indigo-300 pl-3 text-sm text-slate-600 italic leading-relaxed">
+                &ldquo;{source.quoted_text}&rdquo;
+              </blockquote>
+            </div>
+          )}
+
+          {/* Source passage */}
+          <div>
+            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
+              Source Passage
+            </h3>
+            {loading && !freshDetail ? (
+              <div className="bg-slate-50 rounded-lg p-3 text-sm text-slate-400 italic">
+                Loading source…
+              </div>
+            ) : (
+              <div className="bg-slate-50 rounded-lg p-3 text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">
+                {displayContent}
+              </div>
+            )}
+          </div>
+
+          {/* Fetch error */}
+          {fetchError && (
+            <div
+              className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2"
+              role="alert"
+            >
+              {fetchError}
+            </div>
+          )}
+
+          {/* Disclaimer */}
+          <p className="text-xs text-slate-400 leading-snug border-t border-slate-100 pt-4">
+            Verification confirms whether this source was retrieved from an authorized document
+            and whether any quoted passage matches the stored text. It does not guarantee that
+            the AI&apos;s interpretation is legally correct. Always verify claims independently.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 # CaseVault — Architecture
 
-> Last updated: Day 11 (AI Case Timeline and Contradiction Detector complete)
+> Last updated: Day 12 (Citation Verification complete)
 
 ## System Overview
 
@@ -23,7 +23,8 @@ FastAPI Backend   (port 8000)
   │
   ├── Search service    →  PostgreSQL + pgvector  (authorization-filtered SQL)
   │
-  ├── RAG service       →  pgvector retrieval  → LLM API  → citation validation
+  ├── RAG service       →  pgvector retrieval  → LLM API  → citation verification
+  │                         (verified / unverified / invalid per citation)
   │
   ├── Agent service     →  allowlisted read-only tools  → LLM API  → citation validation
   │
@@ -296,25 +297,49 @@ POST /chat/ask  (authenticated)
   ├── LLMProvider.generate()  (OpenAIProvider or FakeLLMProvider in tests)
   │     If provider returns "INSUFFICIENT_EVIDENCE" → early return
   │
-  ├── _parse_and_validate_citations()
+  ├── _parse_and_validate_citations()  →  _extract_nearby_quote()
   │     Extract [SOURCE:N] references from answer
   │     Validate each N against the retrieved set (0-indexed, range check)
   │     Discard fabricated or out-of-range IDs silently
-  │     Map valid IDs → SourceCitation objects
+  │     For each valid citation:
+  │       Search ±500 chars for a double-quoted passage "..."
+  │       If found and substring of chunk → verification_status = "verified"
+  │       If found and not substring     → verification_status = "invalid"
+  │       If not found                   → verification_status = "unverified"
+  │     Map valid IDs → SourceCitation (with verification_status, verification_note, quoted_text)
   │
   ├── Persist ConversationMessage (user question + assistant answer)
   │
-  └── Return AskResponse (answer + validated citations + insufficient_evidence flag)
+  └── Return AskResponse (answer + verified citations + insufficient_evidence flag)
 ```
 
-### Citation Security
+### Citation Verification
 
-The citation system prevents the LLM from fabricating sources:
-- Each retrieved chunk is numbered `[SOURCE:N]` (N = 0-based index, size of retrieved set)
-- The LLM is instructed to cite only using `[SOURCE:N]` references
-- **Server-side validation**: every `[SOURCE:N]` in the answer is checked against the retrieved set
-- Out-of-range N, negative N, or references to chunks not in the retrieved set are silently dropped
-- The client only ever receives citations that correspond to actual retrieved, authorized chunks
+Each `SourceCitation` in the response carries a `verification_status`:
+
+| Status | Meaning |
+|---|---|
+| `verified` | Source reference resolves AND any quoted passage in the answer is found verbatim in the stored chunk. |
+| `unverified` | Source reference resolves but no exact quoted passage was detected near the citation marker. |
+| `invalid` | Source reference resolves but a detected quoted passage does NOT appear in the stored chunk (possible misquote or paraphrase). |
+
+**What verification guarantees:**
+- The cited source was retrieved from an authorized document.
+- Any exact quoted text attributed to the source matches the stored content.
+
+**What verification does NOT guarantee:**
+- That the AI's broader interpretation or conclusion is correct.
+- That the cited passage is legally meaningful or complete.
+
+**Additional endpoint:** `GET /chat/sources/{chunk_id}?quoted_text=...`
+Re-fetches the chunk from the database, re-checks authorization, and re-verifies the
+supplied `quoted_text` against the live stored content. Returns `SourceDetailResponse`.
+
+**Security:**
+- Each retrieved chunk is numbered `[SOURCE:N]` in the prompt.
+- Out-of-range or fabricated source IDs are silently dropped before the response.
+- The `verification_status` is computed deterministically server-side; the LLM cannot inject a `"verified"` flag.
+- The source detail endpoint re-authorizes the chunk on every request — membership is never cached.
 
 ---
 

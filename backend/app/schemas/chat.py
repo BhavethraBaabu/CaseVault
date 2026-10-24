@@ -42,6 +42,17 @@ class SourceCitation(BaseModel):
     Sources come exclusively from the authorized retrieval set.
     They are validated application-side; the model cannot inject
     arbitrary document references.
+
+    verification_status:
+      "verified"   — source resolves AND any quoted passage detected in the
+                     answer appears verbatim in the stored chunk text.
+      "unverified" — source resolves but no exact quotation was detected
+                     near the citation marker.
+      "invalid"    — source resolves but a detected quoted passage does NOT
+                     appear in the stored chunk text (possible misquote).
+
+    Note: "verified" confirms the source reference and quotation match.  It
+    does NOT certify that the AI's broader claim is legally correct.
     """
 
     document_id: uuid.UUID
@@ -53,6 +64,10 @@ class SourceCitation(BaseModel):
     excerpt: str
     # Cosine similarity ∈ [0, 1] from the retrieval step.
     similarity: float
+    # Citation verification
+    verification_status: str  # "verified" | "unverified" | "invalid"
+    verification_note: str
+    quoted_text: str | None
 
 
 class AskResponse(BaseModel):
@@ -75,6 +90,31 @@ class AskResponse(BaseModel):
     answer: str
     insufficient_evidence: bool
     sources: list[SourceCitation]
+
+
+class SourceDetailResponse(BaseModel):
+    """
+    Full source detail for a cited document chunk.
+
+    Returned by GET /chat/sources/{chunk_id}.  The chunk is re-fetched
+    from the database and re-authorized on every request, so this response
+    reflects the current state of the stored source.
+
+    If quoted_text was supplied as a query parameter, verification_status
+    reflects whether that text appears verbatim in the stored content.
+    If no quoted_text was supplied, verification_status is "unverified".
+    """
+
+    chunk_id: uuid.UUID
+    document_id: uuid.UUID
+    document_name: str
+    case_id: uuid.UUID
+    chunk_index: int
+    page_number: int | None
+    content: str  # Full stored chunk text
+    verification_status: str  # "verified" | "unverified" | "invalid"
+    verification_note: str
+    quoted_text: str | None  # The text that was verified, if any
 
 
 class ConversationResponse(BaseModel):

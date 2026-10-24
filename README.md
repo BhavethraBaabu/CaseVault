@@ -7,8 +7,8 @@ It combines structured case and document management with AI-powered semantic
 document retrieval, enabling attorneys to surface relevant precedents and case
 facts instantly.
 
-> **Day 11 status:** AI Case Timeline and Contradiction Detector complete.
-> 419 backend tests pass. All quality gates green.
+> **Day 12 status:** Citation Verification complete (verified / unverified / invalid per citation).
+> 439 backend tests pass. All quality gates green.
 > See [docs/DEMO_GUIDE.md](docs/DEMO_GUIDE.md) for the concise demo walkthrough,
 > [docs/DEMO.md](docs/DEMO.md) for the full interview demo script, and
 > [docs/INTERVIEW_NOTES.md](docs/INTERVIEW_NOTES.md) for architecture trade-offs.
